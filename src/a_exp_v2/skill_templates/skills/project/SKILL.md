@@ -39,6 +39,16 @@ proposal under `reports/project/` or add an entry to `APPROVAL_QUEUE.md`.
 
 ## Task Shape
 
+Top-level tasks are scheduler and closeout units, not implementation steps.
+Prefer one top-level task for a coherent goal-mode unit. Put internal steps
+under `Done when` or in a plan. Split into multiple top-level tasks only when
+the pieces should be independently scheduled, retried, blocked, approved, or
+closed out.
+
+When either shape is reasonable and the choice materially changes how the
+project will be operated, ask the human whether they prefer a single goal-mode
+task or a broken-down task series.
+
 ```markdown
 - [ ] Imperative task title
   Why: Why this matters.

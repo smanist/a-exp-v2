@@ -22,12 +22,28 @@ def write_project(root: Path, name: str, tasks: str) -> None:
 def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     created = core.init_workspace(tmp_path)
 
+    assert tmp_path / ".git" in created
+    assert (tmp_path / ".git").exists()
     assert tmp_path / ".a-exp" / "config.yaml" in created
     assert (tmp_path / "projects").is_dir()
     assert not (tmp_path / "projects" / "a-exp").exists()
     assert (tmp_path / "APPROVAL_QUEUE.md").exists()
+    agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "## Fast Orientation" in agents_text
+    assert "`projects/<project>/TASKS.md`: the project work lane" in agents_text
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
     assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
+
+
+def test_init_does_not_create_nested_git_repo(tmp_path: Path) -> None:
+    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True, text=True)
+    workspace = tmp_path / "workspace"
+
+    created = core.init_workspace(workspace)
+
+    assert workspace / ".git" not in created
+    assert not (workspace / ".git").exists()
+    assert (workspace / ".a-exp" / "config.yaml").exists()
 
 
 def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ test = [
 
 [project.scripts]
 a-exp-v2 = "a_exp_v2.cli:main"
-a-exp = "a_exp_v2.cli:main"
+# a-exp = "a_exp_v2.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

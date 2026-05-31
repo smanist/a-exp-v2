@@ -117,6 +117,9 @@ def find_workspace(start: Path | None = None) -> Path:
 def init_workspace(root: Path) -> list[Path]:
     created: list[Path] = []
     root.mkdir(parents=True, exist_ok=True)
+    git_dir = init_git_repo_if_needed(root)
+    if git_dir is not None:
+        created.append(git_dir)
     paths = [
         root / ".a-exp",
         root / ".a-exp" / "runs",
@@ -151,6 +154,32 @@ def init_workspace(root: Path) -> list[Path]:
     created.extend(copy_package_tree(root, "skill_templates/skills", ".agents/skills"))
     created.extend(copy_package_tree(root, "doc_templates", "docs"))
     return created
+
+
+def init_git_repo_if_needed(root: Path) -> Path | None:
+    try:
+        status = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise WorkspaceError("Git is required to initialize an a-exp-v2 workspace.") from exc
+    if status.returncode == 0 and status.stdout.strip() == "true":
+        return None
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "init"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "git init failed"
+        raise WorkspaceError(detail)
+    git_dir = root / ".git"
+    return git_dir if git_dir.exists() else None
 
 
 def copy_package_tree(root: Path, package_subdir: str, destination: str) -> list[Path]:
@@ -192,6 +221,34 @@ def default_agents_text() -> str:
 
 This repository is an a-exp-v2 workspace.
 
+## Fast Orientation
+
+- `AGENTS.md`: first-read orientation for this workspace.
+- `.a-exp/config.yaml`: lane defaults and per-project enablement, priority,
+  model, and timeout.
+- `.a-exp/runs/*.json`: completed or failed run records.
+- `.a-exp/logs/`: captured `codex exec` stdout/stderr for each run.
+- `.a-exp/running/*.json`: active-run markers used to keep one run active at a
+  time.
+- `.agents/skills/`: workflow, project, review, report, packet, and diagnose
+  skills.
+- `projects/<project>/README.md`: durable project context, decisions, closeout
+  notes, and artifact references.
+- `projects/<project>/TASKS.md`: the project work lane. Unchecked tasks are
+  open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks from being
+  runnable.
+- `projects/<project>/plans/`: optional plans for larger work.
+- `projects/<project>/experiments/<id>/EXPERIMENT.md`: experiment design,
+  results, and findings.
+- `projects/<project>/experiments/<id>/progress.json`: active experiment state;
+  `running`, `retrying`, and `stopping` count as running.
+- `projects/<project>/budget.yaml` and `ledger.yaml`: optional budget and spend
+  memory.
+- `modules/registry.yaml`: optional registry for reusable modules and artifacts.
+- `reports/`: cross-project reports, packets, research, and generated kanban
+  summaries.
+- `APPROVAL_QUEUE.md`: durable human approval queue.
+
 ## Work Cycle
 
 Use the `workflow` skill for external-scheduler-triggered work. Select one
@@ -200,6 +257,11 @@ that task, and close out into durable project memory.
 
 Durable memory lives under `projects/<project>/`. Runtime provenance lives under
 `.a-exp/`.
+
+For project creation, create only the files the project currently needs. The
+minimum useful project is `projects/<project>/README.md` plus
+`projects/<project>/TASKS.md`; add plans, experiments, budgets, ledgers, and
+reports when the task actually needs them.
 """
 
 

@@ -26,6 +26,8 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     assert (tmp_path / "projects").is_dir()
     assert not (tmp_path / "projects" / "a-exp").exists()
     assert (tmp_path / "APPROVAL_QUEUE.md").exists()
+    assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
+    assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
 
 
 def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:
@@ -103,7 +105,16 @@ def test_run_once_records_success_when_project_memory_changes(
 
     def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
         readme = root / "projects" / lane.project / "README.md"
-        readme.write_text(readme.read_text(encoding="utf-8") + "\nLog entry\n", encoding="utf-8")
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            + "\n## Task closeout\n\n"
+            + "Task: Ready\n"
+            + "Status: completed\n"
+            + "Verification:\n"
+            + "- Command: pytest\n"
+            + "- Result: passed\n",
+            encoding="utf-8",
+        )
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("fake log\n", encoding="utf-8")
         return subprocess.CompletedProcess(["codex"], 0, "ok", "")
@@ -116,6 +127,12 @@ def test_run_once_records_success_when_project_memory_changes(
     assert record["project"] == "demo"
     assert record["task"] == "Ready"
     assert record["closeout_validation"]["ok"] is True
+    assert record["closeout_validation"]["checks"] == {
+        "durable_memory_changed": True,
+        "task_mentioned": True,
+        "outcome_recorded": True,
+        "verification_recorded": True,
+    }
     run_files = list((tmp_path / ".a-exp" / "runs").glob("*.json"))
     assert len(run_files) == 1
 

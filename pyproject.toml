@@ -25,6 +25,12 @@ a-exp = "a_exp_v2.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+a_exp_v2 = [
+  "doc_templates/**/*.md",
+  "skill_templates/**/*.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

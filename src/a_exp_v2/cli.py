@@ -8,6 +8,7 @@ import typer
 from . import __version__
 from .core import (
     AExpError,
+    WorkspaceError,
     find_workspace,
     format_status,
     init_workspace,
@@ -19,6 +20,11 @@ from .kanban import generate as generate_kanban
 
 
 app = typer.Typer(no_args_is_help=True, invoke_without_command=True)
+
+
+def exit_with_error(exc: AExpError) -> None:
+    typer.echo(str(exc), err=True)
+    raise typer.Exit(exc.exit_code)
 
 
 @app.callback()
@@ -45,7 +51,10 @@ def status(
     json_output: bool = typer.Option(False, "--json", help="Print scheduler-readable JSON."),
 ) -> None:
     """Show repo runnable-work status."""
-    root = find_workspace()
+    try:
+        root = find_workspace()
+    except AExpError as exc:
+        exit_with_error(exc)
     data = status_json(root)
     if json_output:
         typer.echo(json.dumps(data, indent=2))
@@ -56,8 +65,11 @@ def status(
 @app.command("run-once")
 def run_once_command() -> None:
     """Run one runnable project work lane."""
-    root = find_workspace()
-    record = run_once(root)
+    try:
+        root = find_workspace()
+        record = run_once(root)
+    except AExpError as exc:
+        exit_with_error(exc)
     if record is None:
         data = status_json(root)
         if data["sessions"]["active"] > 0:
@@ -71,16 +83,22 @@ def run_once_command() -> None:
 @app.command()
 def enable(project: str) -> None:
     """Enable a project work lane."""
-    root = find_workspace()
-    set_project_enabled(root, project, True)
+    try:
+        root = find_workspace()
+        set_project_enabled(root, project, True)
+    except AExpError as exc:
+        exit_with_error(exc)
     typer.echo(f"Enabled {project}")
 
 
 @app.command()
 def disable(project: str) -> None:
     """Disable a project work lane."""
-    root = find_workspace()
-    set_project_enabled(root, project, False)
+    try:
+        root = find_workspace()
+        set_project_enabled(root, project, False)
+    except AExpError as exc:
+        exit_with_error(exc)
     typer.echo(f"Disabled {project}")
 
 
@@ -90,10 +108,16 @@ def kanban(
     output_dir: Path | None = typer.Option(None, "--output-dir", help="Output directory."),
 ) -> None:
     """Generate deterministic Markdown kanban summaries."""
-    root = find_workspace()
+    try:
+        root = find_workspace()
+    except AExpError as exc:
+        exit_with_error(exc)
     if output_dir is not None and not output_dir.is_absolute():
         output_dir = root / output_dir
-    paths = generate_kanban(root, project=project, output_dir=output_dir)
+    try:
+        paths = generate_kanban(root, project=project, output_dir=output_dir)
+    except FileNotFoundError as exc:
+        exit_with_error(WorkspaceError(str(exc)))
     for path in paths:
         typer.echo(path)
 

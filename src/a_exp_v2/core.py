@@ -8,6 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -147,6 +148,32 @@ def init_workspace(root: Path) -> list[Path]:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             created.append(path)
+    created.extend(copy_package_tree(root, "skill_templates/skills", ".agents/skills"))
+    created.extend(copy_package_tree(root, "doc_templates", "docs"))
+    return created
+
+
+def copy_package_tree(root: Path, package_subdir: str, destination: str) -> list[Path]:
+    created: list[Path] = []
+    source = resources.files("a_exp_v2").joinpath(package_subdir)
+    dest_root = root / destination
+
+    def copy_dir(current: Any, rel_parts: tuple[str, ...] = ()) -> None:
+        for item in current.iterdir():
+            next_parts = (*rel_parts, item.name)
+            if item.is_dir():
+                copy_dir(item, next_parts)
+                continue
+            if not item.is_file():
+                continue
+            dest = dest_root.joinpath(*next_parts)
+            if dest.exists():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(item.read_bytes())
+            created.append(dest)
+
+    copy_dir(source)
     return created
 
 
@@ -167,9 +194,9 @@ This repository is an a-exp-v2 workspace.
 
 ## Work Cycle
 
-Use the `workflow` skill for scheduled work. Select one runnable task from a
-project, triage the execution mode, complete or hand off that task, and close
-out into durable project memory.
+Use the `workflow` skill for external-scheduler-triggered work. Select one
+runnable task from a project, triage the execution mode, complete or hand off
+that task, and close out into durable project memory.
 
 Durable memory lives under `projects/<project>/`. Runtime provenance lives under
 `.a-exp/`.
@@ -429,7 +456,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
         prompt = workflow_prompt(lane, task)
         result = launch_agent(root, prompt, lane, log_path)
         after = durable_memory_snapshot(root, lane.project)
-        validation = validate_closeout(before, after)
+        validation = validate_closeout(before, after, task.title)
         status = "completed" if result.returncode == 0 and validation["ok"] else "failed"
         record = {
             "run_id": run_id,
@@ -452,7 +479,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
         marker_path.unlink(missing_ok=True)
 
 
-def durable_memory_snapshot(root: Path, project: str) -> dict[str, str]:
+def durable_memory_snapshot(root: Path, project: str) -> dict[str, dict[str, str]]:
     snapshot = {}
     roots = [
         root / "projects" / project,
@@ -468,25 +495,53 @@ def durable_memory_snapshot(root: Path, project: str) -> dict[str, str]:
 
     for path in files:
         try:
-            snapshot[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            content = path.read_text(encoding="utf-8", errors="replace")
+            snapshot[str(path.relative_to(root))] = {
+                "hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "content": content,
+            }
         except OSError:
             continue
     return snapshot
 
 
-def validate_closeout(before: dict[str, str], after: dict[str, str]) -> dict[str, Any]:
+def validate_closeout(
+    before: dict[str, dict[str, str]],
+    after: dict[str, dict[str, str]],
+    task_title: str,
+) -> dict[str, Any]:
     changed = sorted(
-        path for path, content_hash in after.items()
-        if before.get(path) != content_hash
+        path for path, item in after.items()
+        if before.get(path, {}).get("hash") != item["hash"]
     )
     durable_changed = [
         path for path in changed
         if path.startswith("projects/") or path.startswith("reports/") or path == "APPROVAL_QUEUE.md"
     ]
+    changed_text = "\n\n".join(after[path]["content"] for path in durable_changed)
+    task_mentioned = task_title in changed_text
+    outcome_recorded = bool(
+        re.search(r"(?im)^\s*(Status|Outcome):\s*(completed|blocked|deferred|failed|partial)\b", changed_text)
+        or re.search(r"(?im)^-\s+\[x\]\s+" + re.escape(task_title) + r"\b", changed_text)
+        or re.search(r"(?im)^-\s+\[ \]\s+" + re.escape(task_title) + r".*\[(blocked-by|approval-needed)", changed_text)
+    )
+    verification_recorded = bool(
+        re.search(r"(?im)^\s*Verification\s*:", changed_text)
+        and re.search(r"(?im)^\s*-\s*Command\s*:", changed_text)
+        and re.search(r"(?im)^\s*-\s*Result\s*:", changed_text)
+    )
+    checks = {
+        "durable_memory_changed": bool(durable_changed),
+        "task_mentioned": task_mentioned,
+        "outcome_recorded": outcome_recorded,
+        "verification_recorded": verification_recorded,
+    }
+    ok = all(checks.values())
     return {
-        "ok": bool(durable_changed),
+        "ok": ok,
+        "checks": checks,
         "changed_durable_memory_files": durable_changed,
-        "message": "durable memory updated" if durable_changed else "no durable memory files changed",
+        "message": "closeout validated" if ok else "closeout missing required evidence",
     }
 
 

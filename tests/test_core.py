@@ -205,6 +205,24 @@ def test_run_once_records_success_when_project_memory_changes(
     }
     run_files = list((tmp_path / ".a-exp" / "runs").glob("*.json"))
     assert len(run_files) == 1
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == "Run a-exp-v2 task for demo"
+    )
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "status", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == ""
+    )
 
 
 def test_run_once_fails_closeout_when_project_memory_does_not_change(
@@ -272,6 +290,61 @@ def test_launch_agent_streams_log_while_process_runs(tmp_path: Path, monkeypatch
     assert "[stdout] ready" in log_text
     assert "[stderr] observed" in log_text
     assert "## summary" in log_text
+    assert (tmp_path / ".a-exp" / "logs" / "live.brief.log").exists()
+
+
+def test_launch_agent_writes_brief_log_with_folded_tool_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "printf 'codex\\n' >&2",
+                "printf 'I am orienting on the project.\\n' >&2",
+                "printf 'exec\\n' >&2",
+                "printf 'python inspect_project.py in /tmp/demo\\n' >&2",
+                "printf ' succeeded in 0ms:\\n' >&2",
+                "printf '# README\\n' >&2",
+                "printf 'lengthy file content\\n' >&2",
+                "printf 'more lengthy file content\\n' >&2",
+                "printf 'codex\\n' >&2",
+                "printf 'I finished reading the project files.\\n' >&2",
+                "printf 'tokens used\\n' >&2",
+                "printf '1,234\\n' >&2",
+                "printf 'Done.\\n'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    lane = core.Lane(
+        project="demo",
+        enabled=True,
+        priority=100,
+        model="test",
+        max_duration_ms=5000,
+        tasks=[],
+    )
+
+    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "brief-demo.log")
+
+    full_log = (tmp_path / ".a-exp" / "logs" / "brief-demo.log").read_text(encoding="utf-8")
+    brief_log = (tmp_path / ".a-exp" / "logs" / "brief-demo.brief.log").read_text(encoding="utf-8")
+    assert result.returncode == 0
+    assert "lengthy file content" in full_log
+    assert "I am orienting on the project." in brief_log
+    assert "Command:" in brief_log
+    assert "Result: succeeded in 0ms:" in brief_log
+    assert "Folded output lines: 3" in brief_log
+    assert "lengthy file content" not in brief_log
+    assert "Tokens used: 1,234" in brief_log
+    assert "Done." in brief_log
 
 
 def test_no_work_and_active_run_do_not_write_run_records(tmp_path: Path) -> None:

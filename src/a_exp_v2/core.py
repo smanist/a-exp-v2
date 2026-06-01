@@ -239,6 +239,41 @@ def commit_created_workspace_files(root: Path, created: list[Path]) -> None:
         raise WorkspaceError(detail)
 
 
+def commit_workspace_changes(root: Path, message: str) -> None:
+    add = subprocess.run(
+        ["git", "-C", str(root), "add", "--all", "--", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if add.returncode != 0:
+        detail = add.stderr.strip() or add.stdout.strip() or "git add failed"
+        raise WorkspaceError(detail)
+
+    diff = subprocess.run(
+        ["git", "-C", str(root), "diff", "--cached", "--quiet", "--exit-code"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if diff.returncode == 0:
+        return
+    if diff.returncode != 1:
+        detail = diff.stderr.strip() or diff.stdout.strip() or "git diff --cached failed"
+        raise WorkspaceError(detail)
+
+    commit = subprocess.run(
+        ["git", "-C", str(root), "-c", "commit.gpgsign=false", "commit", "-m", message],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=git_commit_env(),
+    )
+    if commit.returncode != 0:
+        detail = commit.stderr.strip() or commit.stdout.strip() or "git commit failed"
+        raise WorkspaceError(detail)
+
+
 def git_commit_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "a-exp-v2")
@@ -585,6 +620,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
     run_path = root / RUNS_DIR / f"{run_id}.json"
     log_path = root / LOGS_DIR / f"{lane.project}-{run_id}.log"
+    brief_log_path = brief_log_path_for(log_path)
     marker_path = root / RUNNING_DIR / f"{run_id}.json"
     started_at = utc_now()
     marker = {
@@ -593,6 +629,8 @@ def run_once(root: Path) -> dict[str, Any] | None:
         "task": task.title,
         "pid": os.getpid(),
         "started_at": started_at,
+        "log_file": str(log_path.relative_to(root)),
+        "brief_log_file": str(brief_log_path.relative_to(root)),
     }
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
@@ -613,12 +651,14 @@ def run_once(root: Path) -> dict[str, Any] | None:
             "ended_at": utc_now(),
             "exit_code": result.returncode,
             "log_file": str(log_path.relative_to(root)),
+            "brief_log_file": str(brief_log_path.relative_to(root)),
             "closeout_validation": validation,
         }
         run_path.parent.mkdir(parents=True, exist_ok=True)
         run_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         if status != "completed":
             raise AgentRunFailed(f"Agent run failed or closeout validation failed: {run_id}")
+        commit_workspace_changes(root, f"Run a-exp-v2 task for {lane.project}")
         return record
     finally:
         marker_path.unlink(missing_ok=True)
@@ -704,8 +744,137 @@ def workflow_prompt(lane: Lane, task: Task) -> str:
     )
 
 
+def brief_log_path_for(log_path: Path) -> Path:
+    return log_path.with_name(f"{log_path.stem}.brief{log_path.suffix}")
+
+
+class BriefLogWriter:
+    def __init__(self, log: Any) -> None:
+        self.log = log
+        self.state = "idle"
+        self.agent_lines = 0
+        self.final_lines = 0
+        self.final_started = False
+        self.folded_lines = 0
+        self.fold_notice_written = False
+
+    def start(self, lane: Lane, timeout: int) -> None:
+        self.log.write(
+            "# codex exec brief log\n\n"
+            f"Project: {lane.project}\n"
+            f"Started: {utc_now()}\n"
+            f"Timeout: {timeout}s\n\n"
+        )
+        self.log.flush()
+
+    def process_line(self, stream: str, line: str) -> None:
+        content = line.rstrip("\n")
+        if stream == "stdout":
+            self._finalize_fold()
+            self._write_final_output(content)
+            return
+
+        stripped = content.strip()
+        if stripped == "codex":
+            self._finalize_fold()
+            self.state = "agent"
+            self.agent_lines = 0
+            self.log.write("\n## Agent update\n")
+            self.log.flush()
+            return
+        if stripped == "exec":
+            self._finalize_fold()
+            self.state = "expect_command"
+            self.log.write("\n## Command\n")
+            self.log.flush()
+            return
+        if stripped == "tokens used":
+            self._finalize_fold()
+            self.state = "expect_tokens"
+            return
+
+        if self.state == "expect_command":
+            if stripped:
+                self.log.write(f"- Command: `{self._truncate(stripped, 260)}`\n")
+                self.state = "expect_result"
+                self.log.flush()
+            return
+        if self.state == "expect_result":
+            if stripped:
+                if stripped.startswith(("succeeded", "failed", "exited", "timed out")):
+                    self.log.write(f"- Result: {self._truncate(stripped, 260)}\n")
+                    self.state = "tool_output"
+                    self.folded_lines = 0
+                    self.fold_notice_written = False
+                    self.log.flush()
+                else:
+                    self.log.write(f"- Detail: {self._truncate(stripped, 260)}\n")
+                    self.log.flush()
+            return
+        if self.state == "tool_output":
+            if stripped:
+                self.folded_lines += 1
+                if not self.fold_notice_written:
+                    self.log.write("- Output: folding command output; see full log for details.\n")
+                    self.fold_notice_written = True
+                    self.log.flush()
+            return
+        if self.state == "expect_tokens":
+            if stripped:
+                self.log.write(f"\nTokens used: {self._truncate(stripped, 80)}\n")
+                self.state = "idle"
+                self.log.flush()
+            return
+        if self.state == "agent":
+            if stripped:
+                self.agent_lines += 1
+                if self.agent_lines <= 4:
+                    self.log.write(f"{self._truncate(stripped, 320)}\n")
+                elif self.agent_lines == 5:
+                    self.log.write("... folded additional agent text; see full log for details.\n")
+                self.log.flush()
+            return
+
+    def finish(self, returncode: int, duration: int, timed_out: bool) -> None:
+        self._finalize_fold()
+        if timed_out:
+            self.log.write("\nTimed out.\n")
+        self.log.write(
+            "\n## Summary\n"
+            f"Duration: {duration}s\n"
+            f"Exit code: {returncode}\n"
+        )
+        self.log.flush()
+
+    def _write_final_output(self, content: str) -> None:
+        if not self.final_started:
+            self.final_started = True
+            self.log.write("\n## Final output\n")
+        if content.strip():
+            self.final_lines += 1
+            if self.final_lines <= 12:
+                self.log.write(f"{self._truncate(content, 360)}\n")
+            elif self.final_lines == 13:
+                self.log.write("... folded additional final output; see full log for details.\n")
+            self.log.flush()
+
+    def _finalize_fold(self) -> None:
+        if self.state == "tool_output" and self.folded_lines:
+            self.log.write(f"- Folded output lines: {self.folded_lines}\n")
+            self.log.flush()
+        self.folded_lines = 0
+        self.fold_notice_written = False
+
+    @staticmethod
+    def _truncate(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
+
 def launch_agent(root: Path, prompt: str, lane: Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    brief_log_path = brief_log_path_for(log_path)
     env = os.environ.copy()
     env["A_EXP_PROJECT"] = lane.project
     env["A_EXP_MODEL"] = lane.model
@@ -717,7 +886,9 @@ def launch_agent(root: Path, prompt: str, lane: Lane, log_path: Path) -> subproc
     stderr_chunks: list[str] = []
     write_lock = threading.Lock()
 
-    with log_path.open("w", encoding="utf-8") as log:
+    with log_path.open("w", encoding="utf-8") as log, brief_log_path.open("w", encoding="utf-8") as brief_log:
+        brief_writer = BriefLogWriter(brief_log)
+        brief_writer.start(lane, timeout)
         log.write(
             "# codex exec live log\n\n"
             f"Project: {lane.project}\n"
@@ -737,24 +908,25 @@ def launch_agent(root: Path, prompt: str, lane: Lane, log_path: Path) -> subproc
             bufsize=1,
         )
 
-        def stream_output(pipe: Any, chunks: list[str], prefix: str) -> None:
+        def stream_output(pipe: Any, chunks: list[str], prefix: str, stream: str) -> None:
             try:
                 for line in pipe:
                     chunks.append(line)
                     with write_lock:
                         log.write(f"{prefix}{line}")
                         log.flush()
+                        brief_writer.process_line(stream, line)
             finally:
                 pipe.close()
 
         stdout_thread = threading.Thread(
             target=stream_output,
-            args=(process.stdout, stdout_chunks, "[stdout] "),
+            args=(process.stdout, stdout_chunks, "[stdout] ", "stdout"),
             daemon=True,
         )
         stderr_thread = threading.Thread(
             target=stream_output,
-            args=(process.stderr, stderr_chunks, "[stderr] "),
+            args=(process.stderr, stderr_chunks, "[stderr] ", "stderr"),
             daemon=True,
         )
         stdout_thread.start()
@@ -786,5 +958,6 @@ def launch_agent(root: Path, prompt: str, lane: Lane, log_path: Path) -> subproc
                 "Tokens: unknown total\n"
             )
             log.flush()
+            brief_writer.finish(returncode, duration, timed_out)
 
     return subprocess.CompletedProcess(command, returncode, "".join(stdout_chunks), "".join(stderr_chunks))

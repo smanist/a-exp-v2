@@ -83,6 +83,7 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         "ended_at",
         "exit_code",
         "log_file",
+        "brief_log_file",
         "closeout_validation",
     ]:
         if key not in data:

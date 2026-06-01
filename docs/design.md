@@ -35,6 +35,7 @@ The external scheduler owns:
 - deterministic lane ordering;
 - one-run-at-a-time locking;
 - run records;
+- live-streamed run logs;
 - closeout validation;
 - deterministic kanban summaries.
 

@@ -25,6 +25,8 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     assert tmp_path / ".git" in created
     assert (tmp_path / ".git").exists()
     assert tmp_path / ".a-exp" / "config.yaml" in created
+    assert tmp_path / ".gitignore" in created
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == core.default_gitignore_text()
     assert (tmp_path / "projects").is_dir()
     assert not (tmp_path / "projects" / "a-exp").exists()
     assert (tmp_path / "APPROVAL_QUEUE.md").exists()
@@ -33,17 +35,69 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     assert "`projects/<project>/TASKS.md`: the project work lane" in agents_text
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
     assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == "Initialize a-exp-v2 workspace"
+    )
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "status", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == ""
+    )
+    artifact_dir = tmp_path / "modules" / "demo" / "artifacts" / "example"
+    artifact_dir.mkdir(parents=True)
+    for name in ["archive.zip", "array.npz", "table.parquet"]:
+        (artifact_dir / name).write_text("data\n", encoding="utf-8")
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "check-ignore",
+                "modules/demo/artifacts/example/archive.zip",
+                "modules/demo/artifacts/example/array.npz",
+                "modules/demo/artifacts/example/table.parquet",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        == [
+            "modules/demo/artifacts/example/archive.zip",
+            "modules/demo/artifacts/example/array.npz",
+            "modules/demo/artifacts/example/table.parquet",
+        ]
+    )
 
 
-def test_init_does_not_create_nested_git_repo(tmp_path: Path) -> None:
+def test_init_creates_workspace_git_root_inside_parent_repo(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True, text=True)
     workspace = tmp_path / "workspace"
 
     created = core.init_workspace(workspace)
 
-    assert workspace / ".git" not in created
-    assert not (workspace / ".git").exists()
+    assert workspace / ".git" in created
+    assert (workspace / ".git").exists()
     assert (workspace / ".a-exp" / "config.yaml").exists()
+    assert (
+        subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == str(workspace)
+    )
 
 
 def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:
@@ -171,6 +225,53 @@ def test_run_once_fails_closeout_when_project_memory_does_not_change(
     run_data = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
     assert run_data["status"] == "failed"
     assert run_data["closeout_validation"]["ok"] is False
+
+
+def test_launch_agent_streams_log_while_process_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "printf 'ready\\n'",
+                "i=0",
+                "while [ $i -lt 40 ]; do",
+                "  if grep -q '\\[stdout\\] ready' .a-exp/logs/live.log; then",
+                "    printf 'observed\\n' >&2",
+                "    exit 0",
+                "  fi",
+                "  i=$((i + 1))",
+                "  sleep 0.05",
+                "done",
+                "printf 'not streamed\\n' >&2",
+                "exit 2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    lane = core.Lane(
+        project="demo",
+        enabled=True,
+        priority=100,
+        model="test",
+        max_duration_ms=5000,
+        tasks=[],
+    )
+
+    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "live.log")
+
+    log_text = (tmp_path / ".a-exp" / "logs" / "live.log").read_text(encoding="utf-8")
+    assert result.returncode == 0
+    assert result.stdout == "ready\n"
+    assert result.stderr == "observed\n"
+    assert "[stdout] ready" in log_text
+    assert "[stderr] observed" in log_text
+    assert "## summary" in log_text
 
 
 def test_no_work_and_active_run_do_not_write_run_records(tmp_path: Path) -> None:

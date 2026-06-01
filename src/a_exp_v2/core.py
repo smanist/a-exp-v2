@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -142,6 +143,7 @@ def init_workspace(root: Path) -> list[Path]:
     files = {
         root / CONFIG_PATH: default_config_text(),
         root / ".a-exp" / "kit.lock.yaml": "source: local\nversion: 2\n",
+        root / ".gitignore": default_gitignore_text(),
         root / "AGENTS.md": default_agents_text(),
         root / "modules" / "registry.yaml": "entries: []\n",
         root / "APPROVAL_QUEUE.md": default_approval_queue(),
@@ -153,20 +155,21 @@ def init_workspace(root: Path) -> list[Path]:
             created.append(path)
     created.extend(copy_package_tree(root, "skill_templates/skills", ".agents/skills"))
     created.extend(copy_package_tree(root, "doc_templates", "docs"))
+    commit_created_workspace_files(root, created)
     return created
 
 
 def init_git_repo_if_needed(root: Path) -> Path | None:
     try:
         status = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             check=False,
         )
     except FileNotFoundError as exc:
         raise WorkspaceError("Git is required to initialize an a-exp-v2 workspace.") from exc
-    if status.returncode == 0 and status.stdout.strip() == "true":
+    if status.returncode == 0 and Path(status.stdout.strip()).resolve() == root.resolve():
         return None
 
     result = subprocess.run(
@@ -180,6 +183,69 @@ def init_git_repo_if_needed(root: Path) -> Path | None:
         raise WorkspaceError(detail)
     git_dir = root / ".git"
     return git_dir if git_dir.exists() else None
+
+
+def commit_created_workspace_files(root: Path, created: list[Path]) -> None:
+    stage_paths = sorted(
+        {
+            str(path.relative_to(root))
+            for path in created
+            if path.exists() and not path.is_dir() and path.name != ".git"
+        }
+    )
+    if not stage_paths:
+        return
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "add", "--", *stage_paths],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "git add failed"
+        raise WorkspaceError(detail)
+
+    diff = subprocess.run(
+        ["git", "-C", str(root), "diff", "--cached", "--quiet", "--exit-code"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if diff.returncode == 0:
+        return
+    if diff.returncode != 1:
+        detail = diff.stderr.strip() or diff.stdout.strip() or "git diff --cached failed"
+        raise WorkspaceError(detail)
+
+    commit = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "Initialize a-exp-v2 workspace",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=git_commit_env(),
+    )
+    if commit.returncode != 0:
+        detail = commit.stderr.strip() or commit.stdout.strip() or "git commit failed"
+        raise WorkspaceError(detail)
+
+
+def git_commit_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("GIT_AUTHOR_NAME", "a-exp-v2")
+    env.setdefault("GIT_AUTHOR_EMAIL", "a-exp-v2@example.local")
+    env.setdefault("GIT_COMMITTER_NAME", "a-exp-v2")
+    env.setdefault("GIT_COMMITTER_EMAIL", "a-exp-v2@example.local")
+    return env
 
 
 def copy_package_tree(root: Path, package_subdir: str, destination: str) -> list[Path]:
@@ -216,6 +282,23 @@ def default_config_text() -> str:
     )
 
 
+def default_gitignore_text() -> str:
+    return """.DS_Store
+.env
+.env.local
+__pycache__/
+*.pyc
+.a-exp/*
+!.a-exp/
+!.a-exp/config.yaml
+!.a-exp/kit.lock.yaml
+reports/*.tmp
+**/artifacts/**/*.zip
+**/artifacts/**/*.npz
+**/artifacts/**/*.parquet
+"""
+
+
 def default_agents_text() -> str:
     return """# AGENTS.md
 
@@ -227,7 +310,7 @@ This repository is an a-exp-v2 workspace.
 - `.a-exp/config.yaml`: lane defaults and per-project enablement, priority,
   model, and timeout.
 - `.a-exp/runs/*.json`: completed or failed run records.
-- `.a-exp/logs/`: captured `codex exec` stdout/stderr for each run.
+- `.a-exp/logs/`: live-streamed `codex exec` stdout/stderr for each run.
 - `.a-exp/running/*.json`: active-run markers used to keep one run active at a
   time.
 - `.agents/skills/`: workflow, project, review, report, packet, and diagnose
@@ -629,23 +712,79 @@ def launch_agent(root: Path, prompt: str, lane: Lane, log_path: Path) -> subproc
     env["A_EXP_MAX_DURATION_MS"] = str(lane.max_duration_ms)
     command = ["codex", "exec", prompt]
     started = time.time()
-    try:
-        result = subprocess.run(
+    timeout = max(1, int(lane.max_duration_ms / 1000))
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    write_lock = threading.Lock()
+
+    with log_path.open("w", encoding="utf-8") as log:
+        log.write(
+            "# codex exec live log\n\n"
+            f"Project: {lane.project}\n"
+            f"Started: {utc_now()}\n"
+            f"Timeout: {timeout}s\n\n"
+            "## output\n"
+        )
+        log.flush()
+
+        process = subprocess.Popen(
             command,
             cwd=root,
             env=env,
             text=True,
-            capture_output=True,
-            timeout=max(1, int(lane.max_duration_ms / 1000)),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
         )
-    except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or "") + "\n" + (exc.stderr or "")
-        log_path.write_text(output, encoding="utf-8")
-        return subprocess.CompletedProcess(command, 124, exc.stdout or "", exc.stderr or "timed out")
-    duration = round(time.time() - started)
-    log_path.write_text(
-        f"# Duration: {duration}s, Cost: unknown, Turns: unknown, Tokens: unknown total\n\n"
-        f"## stdout\n{result.stdout}\n\n## stderr\n{result.stderr}\n",
-        encoding="utf-8",
-    )
-    return result
+
+        def stream_output(pipe: Any, chunks: list[str], prefix: str) -> None:
+            try:
+                for line in pipe:
+                    chunks.append(line)
+                    with write_lock:
+                        log.write(f"{prefix}{line}")
+                        log.flush()
+            finally:
+                pipe.close()
+
+        stdout_thread = threading.Thread(
+            target=stream_output,
+            args=(process.stdout, stdout_chunks, "[stdout] "),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=stream_output,
+            args=(process.stderr, stderr_chunks, "[stderr] "),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+
+        timed_out = False
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            returncode = 124
+            process.kill()
+            process.wait()
+            stderr_chunks.append("timed out")
+
+        stdout_thread.join()
+        stderr_thread.join()
+
+        duration = round(time.time() - started)
+        with write_lock:
+            if timed_out:
+                log.write("\n[stderr] timed out\n")
+            log.write(
+                "\n## summary\n"
+                f"Duration: {duration}s\n"
+                f"Exit code: {returncode}\n"
+                "Cost: unknown\n"
+                "Turns: unknown\n"
+                "Tokens: unknown total\n"
+            )
+            log.flush()
+
+    return subprocess.CompletedProcess(command, returncode, "".join(stdout_chunks), "".join(stderr_chunks))

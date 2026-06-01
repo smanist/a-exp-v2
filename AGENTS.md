@@ -32,7 +32,7 @@ deeper docs.
 - `.a-exp/config.yaml`: lane defaults and per-project enablement, priority,
   model, and timeout.
 - `.a-exp/runs/*.json`: completed or failed run records.
-- `.a-exp/logs/`: captured `codex exec` stdout/stderr for each run.
+- `.a-exp/logs/`: live-streamed `codex exec` stdout/stderr for each run.
 - `.a-exp/running/*.json`: active-run markers used to keep one run active at a
   time.
 - `.agents/skills/`: workflow, project, review, report, packet, and diagnose

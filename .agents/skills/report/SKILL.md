@@ -29,3 +29,8 @@ Write reports under `reports/` unless the human requests another location.
 Reports should not change project state unless explicitly requested. If a report
 discovers follow-up work, add tasks only when asked or when the workflow task
 requires closeout into project memory.
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

@@ -25,3 +25,8 @@ Distinguish data interpretation from agent failure analysis. If the issue is
 whether written conclusions are supported, use `review` instead.
 
 Record durable diagnoses under `projects/<project>/` or `reports/`.
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

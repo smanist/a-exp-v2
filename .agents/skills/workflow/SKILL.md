@@ -75,3 +75,8 @@ If a field is not applicable, write `none`. Do not omit `Verification`; for
 approval/defer/handoff, use `Command: not run` and explain the result.
 
 Do not automatically execute follow-up tasks. Add them to `TASKS.md`.
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

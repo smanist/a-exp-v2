@@ -55,3 +55,8 @@ task or a broken-down task series.
   Done when: Mechanically verifiable completion condition.
   Priority: high|medium|low
 ```
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

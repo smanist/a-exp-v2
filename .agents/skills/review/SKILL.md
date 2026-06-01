@@ -30,3 +30,8 @@ If results are unexpected or confusing, recommend `diagnose`.
 
 Write review output under project memory or `reports/` when the review should
 persist.
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

@@ -65,3 +65,9 @@ For project creation, create only the files the project currently needs. The
 minimum useful project is `projects/<project>/README.md` plus
 `projects/<project>/TASKS.md`; add plans, experiments, budgets, ledgers, and
 reports when the task actually needs them.
+
+## Git Rule
+
+After any repo change made by a skill, CLI command, or manual workflow, commit
+the resulting changes. Use `git status --short` to confirm the workspace is
+clean except for intentionally ignored files.

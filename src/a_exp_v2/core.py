@@ -380,6 +380,12 @@ For project creation, create only the files the project currently needs. The
 minimum useful project is `projects/<project>/README.md` plus
 `projects/<project>/TASKS.md`; add plans, experiments, budgets, ledgers, and
 reports when the task actually needs them.
+
+## Git Rule
+
+After any repo change made by a skill, CLI command, or manual workflow, commit
+the resulting changes. Use `git status --short` to confirm the workspace is
+clean except for intentionally ignored files.
 """
 
 
@@ -487,6 +493,8 @@ def set_project_enabled(root: Path, project: str, enabled: bool) -> None:
         lane.priority = DEFAULT_PRIORITY
     config.projects[project] = lane
     dump_config(config, config_path)
+    action = "Enable" if enabled else "Disable"
+    commit_workspace_changes(root, f"{action} a-exp-v2 project {project}")
 
 
 def pending_approvals(root: Path) -> int:
@@ -656,9 +664,9 @@ def run_once(root: Path) -> dict[str, Any] | None:
         }
         run_path.parent.mkdir(parents=True, exist_ok=True)
         run_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        commit_workspace_changes(root, f"Run a-exp-v2 task for {lane.project}")
         if status != "completed":
             raise AgentRunFailed(f"Agent run failed or closeout validation failed: {run_id}")
-        commit_workspace_changes(root, f"Run a-exp-v2 task for {lane.project}")
         return record
     finally:
         marker_path.unlink(missing_ok=True)

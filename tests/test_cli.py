@@ -54,6 +54,24 @@ def test_cli_init_status_enable_disable_and_kanban(tmp_path: Path) -> None:
         kanban_result = runner.invoke(app, ["kanban"])
         assert kanban_result.exit_code == 0
         assert (cwd / "reports" / "kanban" / "demo.md").exists()
+        assert (
+            subprocess.run(
+                ["git", "-C", str(cwd), "log", "-1", "--format=%s"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            == "Generate a-exp-v2 kanban"
+        )
+        assert (
+            subprocess.run(
+                ["git", "-C", str(cwd), "status", "--short"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            == ""
+        )
 
 
 def test_cli_run_once_success_and_run_record_schema(

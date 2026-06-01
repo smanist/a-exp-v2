@@ -33,7 +33,11 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "## Fast Orientation" in agents_text
     assert "`projects/<project>/TASKS.md`: the project work lane" in agents_text
+    assert "## Git Rule" in agents_text
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
+    assert "## Git Closeout" in (
+        tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md"
+    ).read_text(encoding="utf-8")
     assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
     assert (
         subprocess.run(
@@ -139,9 +143,36 @@ def test_enable_disable_requires_existing_project(tmp_path: Path) -> None:
 
     core.set_project_enabled(tmp_path, "demo", False)
     assert core.status_json(tmp_path)["jobs"]["items"][0]["state"] == "disabled"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == "Disable a-exp-v2 project demo"
+    )
 
     core.set_project_enabled(tmp_path, "demo", True)
     assert core.status_json(tmp_path)["jobs"]["items"][0]["state"] == "runnable"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == "Enable a-exp-v2 project demo"
+    )
+    assert (
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "status", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == ""
+    )
 
     with pytest.raises(core.WorkspaceError, match="Project has no TASKS.md"):
         core.set_project_enabled(tmp_path, "missing", True)

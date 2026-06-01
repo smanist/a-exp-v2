@@ -9,6 +9,7 @@ from . import __version__
 from .core import (
     AExpError,
     WorkspaceError,
+    commit_workspace_changes,
     find_workspace,
     format_status,
     init_workspace,
@@ -116,8 +117,11 @@ def kanban(
         output_dir = root / output_dir
     try:
         paths = generate_kanban(root, project=project, output_dir=output_dir)
+        commit_workspace_changes(root, "Generate a-exp-v2 kanban")
     except FileNotFoundError as exc:
         exit_with_error(WorkspaceError(str(exc)))
+    except AExpError as exc:
+        exit_with_error(exc)
     for path in paths:
         typer.echo(path)
 

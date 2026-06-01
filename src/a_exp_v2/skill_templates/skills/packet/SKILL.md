@@ -41,3 +41,8 @@ The packet should identify:
 
 Do not use `packet` for internal goal-mode execution. The workflow skill decides
 whether to use goal mode.
+
+## Git Closeout
+
+After writing repo changes, run `git status --short`, commit the intended
+changes, and leave the workspace clean except for intentionally ignored files.

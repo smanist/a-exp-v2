@@ -17,6 +17,7 @@ Read the experiment record, protocol pack, and method definitions. Identify:
 - initial search budget in number of runs;
 - refinement budget in number of runs;
 - stochastic elements and whether tuning uses fixed splits or averaged trials.
+- whether `helper_applicability` permits using the protocol helper.
 
 ## Policy
 
@@ -40,6 +41,8 @@ protocols/numerics/convergence-study/v1/helpers/tuning_plan.py
 
 The helper can generate initial grid/random candidates from a JSON parameter
 spec and exposes a bounded `nelder_mead_like` function for project code.
+If the helper assumptions do not fit, record why and implement the tuning plan
+manually.
 
 ## Output
 

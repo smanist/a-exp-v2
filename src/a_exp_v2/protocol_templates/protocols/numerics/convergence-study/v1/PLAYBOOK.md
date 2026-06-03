@@ -102,7 +102,9 @@ trials, or another policy.
 
 The protocol includes `helpers/tuning_plan.py` for generating budgeted initial
 search plans and for reusing a small bounded Nelder-Mead-like refinement
-routine when project code wants a generic implementation.
+routine when project code wants a generic implementation. Check
+`helpers/USAGE.md` and `helper_applicability` in `protocol.yaml` before using
+the helper.
 
 ## Repeated Trials
 
@@ -112,7 +114,9 @@ initialization, randomized algorithms, or stochastic solvers.
 
 Record the number of trials, seed or realization ids, and the per-trial raw
 results. Report mean and standard deviation for the primary metric and any
-secondary metrics used for interpretation.
+secondary metrics used for interpretation. When raw per-trial results are CSV
+rows with scalar numeric metrics, `helpers/aggregate_trials.py` can generate
+`trial_statistics.csv`.
 
 ## Convergence Sanity
 
@@ -130,6 +134,9 @@ For each method or condition, check:
 - whether parameter or solver behavior changes with refinement;
 - whether the reference quantity is accurate enough for the claimed error.
 
+When the convergence model is linear or log-log over numeric refinement levels,
+`helpers/fit_convergence.py` can generate a reusable convergence-rate report.
+
 ## Required Plots
 
 Include these plots when they apply:
@@ -146,6 +153,12 @@ Include these plots when they apply:
   error;
 - setup plots that explain the domain, data distribution, geometry, boundary
   conditions, or other problem context.
+
+When aggregated convergence rows are available and log-scale axes are
+appropriate, `helpers/plot_convergence.py` can generate a dependency-free SVG
+overlay plot. Parameter-search and method-output plots are often domain
+specific; use the protocol requirements as the plot recipe when generic code
+does not apply.
 
 ## Anchor-Case Debugging
 
@@ -183,3 +196,6 @@ A convergence study closeout must say:
 - whether old artifacts were superseded, confirmed, partially confirmed, or
   left provisional;
 - the final interpretation and remaining caveats.
+
+Before closeout, `helpers/validate_protocol_artifacts.py` can check file and
+section completeness. It does not validate scientific correctness.

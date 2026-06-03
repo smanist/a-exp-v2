@@ -19,8 +19,9 @@ HELPER_PATH = (
 )
 
 
-def load_helper():
-    spec = importlib.util.spec_from_file_location("tuning_plan", HELPER_PATH)
+def load_helper(name: str = "tuning_plan"):
+    path = HELPER_PATH.parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -74,3 +75,109 @@ def test_nelder_mead_like_refines_quadratic() -> None:
     assert result["value"] < 1e-3
     assert abs(result["x"][0] - 2.0) < 0.1
     assert abs(result["x"][1] + 1.0) < 0.1
+
+
+def test_aggregate_trials_computes_mean_and_sample_std() -> None:
+    helper = load_helper("aggregate_trials")
+    rows = [
+        {"method": "a", "refinement": "10", "metric": "err", "value": "1.0"},
+        {"method": "a", "refinement": "10", "metric": "err", "value": "3.0"},
+        {"method": "b", "refinement": "10", "metric": "err", "value": "2.0"},
+    ]
+
+    result = helper.aggregate_trials(rows, group_columns=["method", "refinement", "metric"], value_column="value")
+
+    assert result[0]["method"] == "a"
+    assert result[0]["count"] == "2"
+    assert result[0]["mean"] == "2"
+    assert result[0]["std"] == "1.41421356237"
+    assert result[1]["method"] == "b"
+    assert result[1]["std"] == "0"
+
+
+def test_fit_convergence_reports_loglog_order_and_monotonicity() -> None:
+    helper = load_helper("fit_convergence")
+    rows = [
+        {"method": "a", "refinement": "10", "mean": "0.1"},
+        {"method": "a", "refinement": "20", "mean": "0.025"},
+        {"method": "a", "refinement": "40", "mean": "0.00625"},
+    ]
+
+    result = helper.fit_convergence(
+        rows,
+        group_columns=["method"],
+        refinement_column="refinement",
+        value_column="mean",
+    )
+
+    assert len(result) == 1
+    assert result[0]["method"] == "a"
+    assert abs(result[0]["order"] - 2.0) < 1e-10
+    assert result[0]["monotone_decreasing"] is True
+
+
+def test_validate_protocol_artifacts_checks_conditional_files_and_sections(tmp_path: Path) -> None:
+    helper = load_helper("validate_protocol_artifacts")
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    for name in [
+        "run_config.yaml",
+        "raw_results.csv",
+        "convergence_summary.csv",
+        "convergence_rates.csv",
+        "trial_statistics.csv",
+        "parameter_search_history.csv",
+    ]:
+        (artifacts / name).write_text("ok\n", encoding="utf-8")
+    (artifacts / "plots").mkdir()
+    experiment = tmp_path / "EXPERIMENT.md"
+    experiment.write_text(
+        "\n".join(
+            [
+                "## Question",
+                "## Problem Definition",
+                "## Refinement Variable",
+                "## Reference or Truth Source",
+                "## Parameter Tuning",
+                "## Metrics",
+                "## Protocol",
+                "## Convergence Sanity Check",
+                "## Results",
+                "## Plots",
+                "## Interpretation",
+                "## Closeout",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = helper.validate_artifacts(
+        artifacts_dir=artifacts,
+        experiment_md=experiment,
+        stochastic=True,
+        tuned=True,
+    )
+
+    assert result["ok"] is True
+
+
+def test_plot_convergence_generates_svg() -> None:
+    helper = load_helper("plot_convergence")
+    rows = [
+        {"method": "a", "refinement": "10", "mean": "0.1", "std": "0.01"},
+        {"method": "a", "refinement": "20", "mean": "0.05", "std": "0.005"},
+        {"method": "b", "refinement": "10", "mean": "0.2", "std": "0.02"},
+        {"method": "b", "refinement": "20", "mean": "0.1", "std": "0.01"},
+    ]
+
+    svg = helper.make_svg(
+        rows,
+        method_column="method",
+        refinement_column="refinement",
+        value_column="mean",
+        std_column="std",
+    )
+
+    assert svg.startswith("<svg")
+    assert "Convergence Overlay" in svg
+    assert "<polyline" in svg

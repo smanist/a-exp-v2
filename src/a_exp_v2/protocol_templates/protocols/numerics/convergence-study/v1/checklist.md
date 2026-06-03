@@ -21,6 +21,8 @@
 - [ ] Trial count per refinement level is recorded when stochastic elements are
   present.
 - [ ] Artifact directory and reproducibility commands are written.
+- [ ] Helper applicability is checked in `protocol.yaml` and `helpers/USAGE.md`
+  before using helper code.
 
 ## Comparison Controls
 
@@ -46,6 +48,8 @@ Use this section when comparing methods or conditions.
 - [ ] Nelder-Mead-like refinement is run after initial search when applicable.
 - [ ] Initial search and refinement budgets are recorded in number of runs.
 - [ ] Validation or selection metric is defined.
+- [ ] `tuning_plan.py` is used when its assumptions fit, or non-use is
+  explained.
 - [ ] Search history is recorded.
 - [ ] Selected parameters and boundary/failed evaluations are recorded.
 
@@ -56,6 +60,8 @@ Use this section when comparing methods or conditions.
 - [ ] Seed or realization ids are recorded.
 - [ ] Per-trial raw results are recorded.
 - [ ] Mean and standard deviation are reported for interpreted metrics.
+- [ ] `aggregate_trials.py` is used when raw per-trial CSV rows match its
+  assumptions, or non-use is explained.
 
 ## Smoke Run
 
@@ -84,6 +90,8 @@ Use this section when comparing methods or conditions.
 
 - [ ] Convergence plot overlays all compared methods.
 - [ ] Convergence plot shows statistics when repeated trials are present.
+- [ ] `plot_convergence.py` is used when aggregated positive rows and log axes
+  match its assumptions, or non-use is explained.
 - [ ] A representative parameter-search plot is included when tuning is used.
 - [ ] 1D parameter searches use validation-metric curves.
 - [ ] 2D parameter searches use contours or heatmaps.
@@ -101,6 +109,8 @@ Use this section when comparing methods or conditions.
 - [ ] Expected rate or trend is compared when known.
 - [ ] Window-sensitivity is checked when the conclusion depends on a fitted
   rate.
+- [ ] `fit_convergence.py` is used when numeric levels and linear/log-log fits
+  match its assumptions, or non-use is explained.
 - [ ] Finest-level result agrees with the overall trend, or disagreement is
   explained.
 - [ ] Outliers and failed runs are explained.
@@ -130,4 +140,6 @@ Use this section when comparing methods or conditions.
 - [ ] Original artifacts are marked superseded, confirmed, partially confirmed,
   or provisional.
 - [ ] Durable project memory is updated.
+- [ ] `validate_protocol_artifacts.py` is used for completeness checking when
+  applicable, or non-use is explained.
 - [ ] Final interpretation and caveats are recorded.

@@ -68,6 +68,15 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
         / "tuning_plan.py"
     ).exists()
     assert (
+        tmp_path
+        / "protocols"
+        / "numerics"
+        / "convergence-study"
+        / "v1"
+        / "helpers"
+        / "aggregate_trials.py"
+    ).exists()
+    assert (
         subprocess.run(
             ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
             check=True,

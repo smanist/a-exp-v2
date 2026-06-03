@@ -213,6 +213,57 @@ plot_policy:
         Additional plots that explain the domain, setup, geometry, data
         distribution, boundary conditions, or other problem context.
 
+helper_applicability:
+  helpers/tuning_plan.py:
+    use_when:
+      - tuned_parameters_present
+      - bounded_or_discrete_search_space_available
+      - objective_can_be_evaluated_by_independent_runs
+    do_not_use_when:
+      - tuning_requires_unrepresented_constraints
+      - objective_evaluations_are_not_comparable
+      - search_space_cannot_be_expressed_as_bounds_or_values
+    produces:
+      - initial_search_plan
+      - nelder_mead_like_refinement_routine
+  helpers/aggregate_trials.py:
+    use_when:
+      - repeated_trials_present
+      - raw_results_are_in_csv_rows
+      - metrics_are_numeric
+    do_not_use_when:
+      - trial_dependence_requires_custom_statistics
+      - metric_values_are_not_scalar
+    produces:
+      - trial_statistics.csv
+  helpers/fit_convergence.py:
+    use_when:
+      - refinement_levels_are_numeric
+      - metric_values_are_positive_for_loglog_fit
+      - at_least_two_levels_exist_in_fit_window
+    do_not_use_when:
+      - convergence_model_is_not_linear_or_loglog
+      - refinement_ordering_is_not_numeric
+    produces:
+      - convergence_rates.json
+  helpers/validate_protocol_artifacts.py:
+    use_when:
+      - artifact_directory_exists
+      - experiment_record_exists_or_file_check_only_is_sufficient
+    do_not_use_when:
+      - validation_requires_domain_scientific_judgment
+    produces:
+      - artifact_completeness_report
+  helpers/plot_convergence.py:
+    use_when:
+      - aggregated_convergence_rows_are_available
+      - refinement_and_metric_values_are_positive
+    do_not_use_when:
+      - plot_requires_domain_specific_geometry_or_fields
+      - non_log_axes_are_required
+    produces:
+      - convergence_overlay.svg
+
 closeout_required_fields:
   - question
   - protocol_version

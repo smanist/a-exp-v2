@@ -81,8 +81,23 @@ parameter_policy:
   record_search_budget_as_number_of_runs: true
   record_refinement_budget_as_number_of_runs: true
   record_boundary_or_failure_cases: true
+  record_parameter_domain_constraints: true
   mark_conclusions_provisional_if_selection_is_unresolved: true
   hidden_numerical_adjustments_allowed: false
+  domain_constraints:
+    allowed_fields:
+      bounds: numeric lower and upper limits
+      values: explicit admissible values for categorical or irregular grids
+      scale: linear or log
+      type: float or int
+      step: admissible grid spacing in the parameter's native units
+      parity: even or odd for integer-valued parameters
+    requirements:
+      log_scale_bounds_must_be_positive: true
+      integer_parameters_must_project_to_integer_values: true
+      parity_constraints_must_be_enforced: true
+      step_or_values_only_domains_must_not_evaluate_off_grid_values: true
+      local_refinement_must_project_or_skip_invalid_candidates: true
   if_numerical_stabilization_is_used:
     record_value_and_reason: true
     distinguish_from_algorithmic_parameter: true
@@ -99,6 +114,7 @@ parameter_policy:
     require_search_history: true
     require_selected_parameters: true
     require_validation_metric_definition: true
+    require_candidate_domain_record: true
 
 repeated_trials_policy:
   if_stochastic_element_present:
@@ -217,12 +233,12 @@ helper_applicability:
   helpers/tuning_plan.py:
     use_when:
       - tuned_parameters_present
-      - bounded_or_discrete_search_space_available
+      - bounded_discrete_or_grid_search_space_available
       - objective_can_be_evaluated_by_independent_runs
     do_not_use_when:
       - tuning_requires_unrepresented_constraints
       - objective_evaluations_are_not_comparable
-      - search_space_cannot_be_expressed_as_bounds_or_values
+      - search_space_cannot_be_expressed_as_bounds_values_scale_type_step_or_parity
     produces:
       - initial_search_plan
       - nelder_mead_like_refinement_routine

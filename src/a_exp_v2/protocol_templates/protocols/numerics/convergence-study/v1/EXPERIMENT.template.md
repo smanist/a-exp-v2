@@ -54,13 +54,20 @@ For each method or condition, record:
 Use this section when any method has tuned parameters.
 
 - Tuned parameter count:
-- Search space:
+- Search space and admissible domains:
+  - bounds:
+  - scale (`linear` or `log`):
+  - type (`float` or `int`):
+  - step/grid spacing, if any:
+  - parity (`even` or `odd`), if any:
+  - explicit admissible values, if values-only:
 - Validation or selection metric:
 - Initial search policy: grid if `<= 3` tuned parameters, random if `> 3`
 - Initial search budget, in runs:
 - Refinement policy: Nelder-Mead-like
 - Refinement budget, in runs:
 - Top-k candidates for refinement, if random search is used:
+- Constraint handling during refinement:
 - Search history artifact:
 - Selected parameters:
 - Boundary, failed, or invalid evaluations:

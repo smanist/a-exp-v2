@@ -61,6 +61,58 @@ def test_initial_search_plan_uses_random_for_more_than_three_parameters() -> Non
     assert plan["candidates"] == helper.initial_search_plan(parameters, 7, seed=123, top_k=2)["candidates"]
 
 
+def test_initial_search_plan_respects_parameter_domain_constraints() -> None:
+    helper = load_helper()
+    parameters = [
+        helper.Parameter.from_mapping({"name": "tol", "bounds": [1e-16, 1e1], "scale": "log"}),
+        helper.Parameter.from_mapping({"name": "degree", "bounds": [1, 9], "type": "int", "parity": "odd"}),
+        helper.Parameter.from_mapping({"name": "theta", "bounds": [0.0, 1.0], "step": 0.25}),
+    ]
+
+    plan = helper.initial_search_plan(parameters, 12)
+
+    assert plan["strategy"] == "grid"
+    assert plan["parameter_domains"][1]["type"] == "int"
+    assert plan["parameter_domains"][1]["parity"] == "odd"
+    assert plan["parameter_domains"][2]["step"] == 0.25
+    assert all(1e-16 <= candidate["tol"] <= 1e1 for candidate in plan["candidates"])
+    assert all(candidate["degree"] % 2 == 1 for candidate in plan["candidates"])
+    assert {candidate["theta"] for candidate in plan["candidates"]}.issubset({0.0, 0.25, 0.5, 0.75, 1.0})
+    assert "project integer" in plan["refinement"]["constraint_note"]
+
+
+def test_random_search_projects_integer_and_step_constraints() -> None:
+    helper = load_helper()
+    parameters = [
+        helper.Parameter.from_mapping({"name": f"continuous_{i}", "bounds": [0.0, 1.0]})
+        for i in range(3)
+    ]
+    parameters.extend(
+        [
+            helper.Parameter.from_mapping({"name": "width", "bounds": [2, 12], "type": "int", "parity": "even"}),
+            helper.Parameter.from_mapping({"name": "mix", "bounds": [0.0, 1.0], "step": 0.2}),
+        ]
+    )
+
+    plan = helper.initial_search_plan(parameters, 20, seed=11)
+
+    assert plan["strategy"] == "random"
+    assert all(candidate["width"] % 2 == 0 for candidate in plan["candidates"])
+    assert all(2 <= candidate["width"] <= 12 for candidate in plan["candidates"])
+    assert {candidate["mix"] for candidate in plan["candidates"]}.issubset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0})
+
+
+def test_parameter_rejects_impossible_integer_constraints() -> None:
+    helper = load_helper()
+
+    try:
+        helper.Parameter.from_mapping({"name": "width", "bounds": [1, 9], "type": "int", "step": 2, "parity": "even"})
+    except ValueError as exc:
+        assert "admit no values" in str(exc)
+    else:
+        raise AssertionError("expected impossible integer constraints to fail")
+
+
 def test_nelder_mead_like_refines_quadratic() -> None:
     helper = load_helper()
 

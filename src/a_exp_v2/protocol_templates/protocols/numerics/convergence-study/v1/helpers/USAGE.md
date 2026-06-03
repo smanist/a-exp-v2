@@ -25,11 +25,23 @@ python protocols/numerics/convergence-study/v1/helpers/tuning_plan.py params.jso
 ```json
 {
   "parameters": [
-    {"name": "alpha", "bounds": [0.001, 10.0], "scale": "log"},
-    {"name": "degree", "values": [1, 2, 3, 4]}
+    {"name": "alpha", "bounds": [1e-16, 10.0], "scale": "log"},
+    {"name": "degree", "bounds": [1, 9], "type": "int", "parity": "odd"},
+    {"name": "theta", "bounds": [0.0, 1.0], "step": 0.25},
+    {"name": "stencil", "values": [3, 5, 7, 9]}
   ]
 }
 ```
+
+Supported parameter fields:
+
+- `bounds`: two numeric limits for bounded domains.
+- `values`: explicit admissible candidates for categorical, irregular, or
+  values-only grids.
+- `scale`: `linear` or `log`; log-scale bounds must be positive.
+- `type`: `float` or `int`.
+- `step`: grid spacing in the parameter's native units.
+- `parity`: `even` or `odd` for integer-valued parameters.
 
 ## Trial Aggregation
 

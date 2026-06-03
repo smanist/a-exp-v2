@@ -18,6 +18,9 @@ work exists in the current repo and, when asked, executes one project work lane.
 - A `job` is the scheduler-facing JSON term for a project work lane.
 - A conventional session and a goal-mode task are execution modes selected by
   the agent workflow, not durable queue types.
+- A `protocol` is a reusable playbook and requirements pack for a recurring
+  experiment type, stored under `protocols/` and referenced by experiment
+  records when applicable.
 
 ## Boundary
 
@@ -60,6 +63,15 @@ The workflow skill owns:
   skills/
 
 docs/
+protocols/
+  registry.yaml
+  <domain>/
+    <protocol>/
+      <version>/
+        PLAYBOOK.md
+        protocol.yaml
+        EXPERIMENT.template.md
+        checklist.md
 projects/
   <project>/
     README.md

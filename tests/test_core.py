@@ -39,6 +39,24 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
         tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
+    assert (tmp_path / "docs" / "schemas" / "protocol.md").exists()
+    assert (tmp_path / "protocols" / "registry.yaml").exists()
+    assert (
+        tmp_path
+        / "protocols"
+        / "numerics"
+        / "convergence-study"
+        / "v1"
+        / "PLAYBOOK.md"
+    ).exists()
+    assert "method and problem agnostic" in (
+        tmp_path
+        / "protocols"
+        / "numerics"
+        / "convergence-study"
+        / "v1"
+        / "PLAYBOOK.md"
+    ).read_text(encoding="utf-8")
     assert (
         subprocess.run(
             ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],

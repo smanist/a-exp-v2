@@ -18,6 +18,8 @@ deeper docs.
 - `src/a_exp_v2/validators.py`: schema-style checks for status JSON and run
   records.
 - `src/a_exp_v2/doc_templates/`: docs copied into initialized workspaces.
+- `src/a_exp_v2/protocol_templates/`: reusable protocol packs copied into
+  initialized workspaces under `protocols/`.
 - `src/a_exp_v2/skill_templates/`: repo-local skills copied into initialized
   workspaces under `.agents/skills/`.
 - `docs/`: human-facing design, SOP, schema, and convention references for
@@ -37,6 +39,8 @@ deeper docs.
   time.
 - `.agents/skills/`: workflow, project, review, report, packet, and diagnose
   skills.
+- `protocols/`: reusable playbooks and protocol packs for recurring experiment
+  types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout
   notes, and artifact references.
 - `projects/<project>/TASKS.md`: the project work lane. Unchecked tasks are

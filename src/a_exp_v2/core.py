@@ -128,6 +128,7 @@ def init_workspace(root: Path) -> list[Path]:
         root / ".a-exp" / "running",
         root / ".agents" / "skills",
         root / "docs",
+        root / "protocols",
         root / "projects",
         root / "modules",
         root / "reports" / "kanban",
@@ -155,6 +156,7 @@ def init_workspace(root: Path) -> list[Path]:
             created.append(path)
     created.extend(copy_package_tree(root, "skill_templates/skills", ".agents/skills"))
     created.extend(copy_package_tree(root, "doc_templates", "docs"))
+    created.extend(copy_package_tree(root, "protocol_templates/protocols", "protocols"))
     commit_created_workspace_files(root, created)
     return created
 
@@ -350,6 +352,8 @@ This repository is an a-exp-v2 workspace.
   time.
 - `.agents/skills/`: workflow, project, review, report, packet, and diagnose
   skills.
+- `protocols/`: reusable playbooks and protocol packs for recurring experiment
+  types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout
   notes, and artifact references.
 - `projects/<project>/TASKS.md`: the project work lane. Unchecked tasks are

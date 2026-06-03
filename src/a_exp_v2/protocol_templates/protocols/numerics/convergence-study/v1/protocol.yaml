@@ -1,0 +1,176 @@
+name: numerics.convergence-study
+version: v1
+status: active
+
+purpose: >
+  Method- and problem-agnostic protocol for numerical convergence studies. Use
+  it when an experiment studies how error, residual, stability, cost, or another
+  quantitative quantity changes as a numerical resolution, data amount,
+  discretization parameter, tolerance, model capacity, or approximation level is
+  refined.
+
+scope:
+  applies_to:
+    - single_method_convergence
+    - method_comparison
+    - discretization_refinement
+    - sample_size_refinement
+    - tolerance_or_iteration_refinement
+    - approximation_order_or_capacity_refinement
+  does_not_assume:
+    - specific_method
+    - specific_equation_or_domain
+    - specific_geometry_or_sampling_distribution
+    - specific_regularization_or_hyperparameter_policy
+    - specific_refinement_levels
+    - method_comparison_required
+
+required_design_fields:
+  - convergence_question
+  - fixed_problem_definition
+  - varied_refinement_variable
+  - refinement_levels
+  - quantity_of_interest
+  - reference_or_truth_source
+  - error_or_quality_metrics
+  - repeated_realization_policy
+  - artifact_directory
+  - reproducibility_commands
+
+refinement_policy:
+  require_ordered_levels: true
+  require_units_and_meaning: true
+  require_expected_direction: true
+  require_fixed_non_refined_conditions: true
+  recommended_minimum_levels: 4
+  asymptotic_window:
+    choose_per_study: true
+    record_selection_rationale: true
+    exclude_levels_only_with_reason: true
+
+metrics_policy:
+  require_primary_metric: true
+  require_metric_definition: true
+  require_reference_quantity_definition: true
+  require_metric_scale_and_units: true
+  require_handling_of_degenerate_cases: true
+  recommended_secondary_metrics:
+    - absolute_error_or_residual
+    - relative_error_if_well_defined
+    - reference_norm_or_scale
+    - cost_or_runtime
+    - stability_or_conditioning_if_relevant
+
+comparison_policy:
+  method_comparison_optional: true
+  if_comparing_methods:
+    require_same_problem_instances: true
+    require_same_metric_definitions: true
+    require_same_refinement_levels_or_explain_mismatch: true
+    require_same_reference_or_truth_source: true
+    require_fairness_controls: true
+    require_method_specific_parameters: true
+    avoid_interpreting_final_level_only: true
+
+parameter_policy:
+  record_fixed_parameters: true
+  record_tuned_parameters: true
+  record_search_or_selection_policy_if_tuned: true
+  record_boundary_or_failure_cases: true
+  mark_conclusions_provisional_if_selection_is_unresolved: true
+  hidden_numerical_adjustments_allowed: false
+  if_numerical_stabilization_is_used:
+    record_value_and_reason: true
+    distinguish_from_algorithmic_parameter: true
+
+convergence_analysis:
+  required: true
+  inspect_raw_results_before_claims: true
+  fit_rate_or_slope_when_appropriate: true
+  record_fit_window: true
+  compare_against_expected_rate_if_known: true
+  document_if_expected_rate_unknown: true
+  check_monotone_or_expected_trend: true
+  check_pre_asymptotic_behavior: true
+  check_outliers_or_failed_runs: true
+  flag_if:
+    - metric_worsens_over_selected_asymptotic_window_without_explanation
+    - fitted_rate_depends_strongly_on_window_choice
+    - raw_results_disagree_with_summary_or_plot
+    - final_level_conclusion_conflicts_with_trend
+    - parameter_selection_or_solver_failure_changes_with_refinement
+    - reference_solution_or_truth_source_is_not_accurate_enough
+
+debug_trigger:
+  condition: suspicious_or_systematic_convergence_behavior
+  action: mark_conclusions_provisional_and_debug_one_anchor_case
+
+anchor_case_policy:
+  choose_per_study: true
+  hard_code_anchor_case_in_protocol: false
+  selection_criteria:
+    - central_to_primary_question
+    - simple_enough_to_audit
+    - reproduces_the_anomaly
+    - cheap_enough_for_extra_diagnostics
+    - includes_all_relevant_methods_or_conditions
+  record_anchor_case_in_experiment: true
+
+debug_diagnostics:
+  raw_vs_summary:
+    verify_raw_results_match_tables: true
+    verify_tables_match_plots: true
+  metric_and_reference:
+    verify_metric_formula: true
+    verify_reference_or_truth_accuracy: true
+    record_reference_scale_or_norm: true
+  refinement:
+    rerun_anchor_over_selected_levels: true
+    add_intermediate_or_finer_levels_when_feasible: recommended
+    check_fit_window_sensitivity: true
+  parameters_and_solver:
+    record_selected_or_fixed_parameters: true
+    test_fixed_parameter_variants_when_relevant: recommended
+    record_solver_tolerances_and_failures: true
+    record_conditioning_or_stability_if_available: recommended
+  randomness:
+    record_seeds_or_realization_ids: true
+    repeat_realizations_when_noise_or_sampling_variance_may_dominate: recommended
+
+fix_policy:
+  patch_minimal_root_cause: true
+  rerun_anchor_before_full_sweep: true
+  rerun_full_study_after_protocol_or_code_fix: true
+  mark_original_results_status: superseded_confirmed_partially_confirmed_or_provisional
+
+artifact_policy:
+  required_files:
+    - run_config.yaml
+    - raw_results.csv
+    - convergence_summary.csv
+    - convergence_rates.csv
+  recommended_files:
+    - plots_or_figures
+    - environment_or_dependency_record
+    - parameter_selection_summary.csv
+    - failure_or_outlier_log.csv
+  debug_files:
+    - anchor_raw_results.csv
+    - anchor_diagnostics.csv
+    - anchor_rerun_summary.csv
+
+closeout_required_fields:
+  - question
+  - protocol_version
+  - refinement_variable
+  - refinement_levels
+  - primary_metric
+  - reference_or_truth_source
+  - convergence_sanity_result
+  - rate_or_trend_summary
+  - anchor_case_if_debugged
+  - root_cause_if_found
+  - fix_applied_if_any
+  - final_interpretation
+  - artifact_status
+  - caveats

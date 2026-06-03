@@ -1,0 +1,126 @@
+# Convergence Study Playbook
+
+## Purpose
+
+Use this playbook when a study asks how a numerical result changes as a
+resolution, data amount, discretization parameter, tolerance, model capacity, or
+other approximation level is refined.
+
+The playbook is method and problem agnostic. It does not assume a particular
+equation, domain, geometry, sampling distribution, model family, solver,
+regularization scheme, or method comparison. It applies to single-method
+studies and comparative studies.
+
+The core rule is:
+
+```text
+Do not interpret a convergence result from the final refinement level alone.
+First inspect raw results, the selected asymptotic window, fitted trend or rate,
+and any suspicious behavior.
+```
+
+## Required Study Definition
+
+Before running the study, write:
+
+- the fixed problem being solved or approximated;
+- the refinement variable and its units or meaning;
+- the ordered refinement levels;
+- the quantity of interest;
+- the reference solution, truth source, residual definition, or validation
+  criterion;
+- the primary metric and any secondary metrics;
+- what is held fixed across refinement levels;
+- whether the study compares methods or studies one method;
+- reproducibility commands and artifact locations.
+
+## Standard Workflow
+
+1. Define the convergence question and the expected qualitative direction of
+   improvement.
+2. Specify the refinement levels and the rationale for the planned asymptotic
+   window.
+3. Define the reference or truth source and verify that it is accurate enough
+   for the claimed refinement range.
+4. Define primary and secondary metrics, including units, scale, and degenerate
+   cases.
+5. Record all fixed parameters, tuned parameters, solver tolerances, random
+   seeds, and realization policies.
+6. Run a small smoke case to verify execution, metrics, artifacts, and plots.
+7. Run the planned sweep.
+8. Inspect raw results before interpreting summaries or plots.
+9. Compute convergence trends or rates over the stated fit window when
+   appropriate.
+10. Compare the observed trend with the expected trend if one is known.
+11. Flag unexplained reversals, unstable fitted rates, reference-solution
+   limits, solver failures, parameter-selection shifts, or raw/summary/plot
+   mismatches.
+12. If suspicious behavior appears, mark conclusions provisional and debug one
+   representative anchor case first.
+13. Patch only the identified root cause, then rerun the anchor case.
+14. Rerun the full study when a code or protocol fix changes the result.
+15. Mark earlier artifacts as superseded, confirmed, partially confirmed, or
+   provisional.
+
+## Comparison Studies
+
+Method comparison is optional. If the study compares methods, keep the
+comparison fair by recording:
+
+- the same problem instances or a documented reason for differences;
+- the same metric definitions;
+- the same reference or truth source;
+- the same refinement levels, or an explicit mismatch rationale;
+- method-specific parameters and tuning rules;
+- failed runs, boundary selections, solver tolerances, or stabilization terms.
+
+Do not report a winner from only the finest level unless the full convergence
+trend supports that interpretation.
+
+## Convergence Sanity
+
+Choose the asymptotic window per study and record the rationale. A useful
+window usually excludes smoke levels, pre-asymptotic levels, and levels where
+the reference solution, solver tolerance, roundoff, sampling noise, or resource
+limits dominate.
+
+For each method or condition, check:
+
+- whether the primary metric improves in the expected direction;
+- whether the fitted rate or trend is stable under reasonable window changes;
+- whether raw results, summary tables, and plots agree;
+- whether failures or outliers were excluded and why;
+- whether parameter or solver behavior changes with refinement;
+- whether the reference quantity is accurate enough for the claimed error.
+
+## Anchor-Case Debugging
+
+When a systematic anomaly appears, select one anchor case before rerunning the
+whole study. The anchor case should:
+
+- be central to the main question;
+- be simple enough to audit;
+- reproduce the anomaly clearly;
+- be cheap enough for extra diagnostics;
+- include all relevant compared methods or conditions when comparison matters.
+
+Debug the anchor case first. Useful diagnostics include metric recomputation,
+reference-solution checks, intermediate refinement levels, fixed-parameter
+variants, solver tolerance sweeps, repeated random realizations, and
+raw/summary/plot consistency checks.
+
+## Closeout
+
+A convergence study closeout must say:
+
+- whether the convergence sanity check passed;
+- the refinement variable and levels used;
+- the primary metric and reference source;
+- the selected fit window and observed rate or trend;
+- whether conclusions are final or provisional;
+- which anchor case was debugged, if any;
+- the root cause of any anomaly, if found;
+- what changed after any fix;
+- whether old artifacts were superseded, confirmed, partially confirmed, or
+  left provisional;
+- the final interpretation and remaining caveats.

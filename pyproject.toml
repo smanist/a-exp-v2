@@ -28,6 +28,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 a_exp_v2 = [
   "doc_templates/**/*.md",
+  "protocol_templates/**/*.md",
+  "protocol_templates/**/*.yaml",
   "skill_templates/**/*.md",
 ]
 

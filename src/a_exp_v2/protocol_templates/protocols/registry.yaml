@@ -1,0 +1,15 @@
+protocols:
+  numerics.convergence-study.v1:
+    title: Convergence Study Protocol
+    status: active
+    path: protocols/numerics/convergence-study/v1
+    playbook: protocols/numerics/convergence-study/v1/PLAYBOOK.md
+    protocol: protocols/numerics/convergence-study/v1/protocol.yaml
+    experiment_template: protocols/numerics/convergence-study/v1/EXPERIMENT.template.md
+    checklist: protocols/numerics/convergence-study/v1/checklist.md
+    description: >
+      Method- and problem-agnostic protocol for numerical convergence studies.
+      It records the convergence question, refinement variable, reference
+      quantity, metrics, fairness controls, sanity checks, anomaly debugging,
+      artifacts, and closeout evidence without assuming a specific method,
+      geometry, model family, solver, or target problem.

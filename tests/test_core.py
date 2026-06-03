@@ -396,6 +396,57 @@ def test_launch_agent_writes_brief_log_with_folded_tool_output(
     assert "Done." in brief_log
 
 
+def test_launch_agent_brief_log_keeps_diff_headers_and_folds_hunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "printf 'exec\\n' >&2",
+                "printf 'git diff -- projects/conv/src/targets.py in /tmp/demo\\n' >&2",
+                "printf ' succeeded in 0ms:\\n' >&2",
+                "printf 'diff --git a/projects/conv/src/targets.py b/projects/conv/src/targets.py\\n' >&2",
+                "printf 'index d806f6552f9ddee71a4c38b97fcb4a3189e9e58f..a9a2995f8abb0beebde0584c62e3fc477ce3af9d 100644\\n' >&2",
+                "printf '%s\\n' '--- a/projects/conv/src/targets.py' >&2",
+                "printf '%s\\n' '+++ b/projects/conv/src/targets.py' >&2",
+                "printf '%s\\n' '@@ -19,6 +19,13 @@' >&2",
+                "printf '%s\\n' '+def generated_code_line():' >&2",
+                "printf '%s\\n' '+    return 42' >&2",
+                "printf '%s\\n' ' context line' >&2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    lane = core.Lane(
+        project="demo",
+        enabled=True,
+        priority=100,
+        model="test",
+        max_duration_ms=5000,
+        tasks=[],
+    )
+
+    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "diff-demo.log")
+
+    brief_log = (tmp_path / ".a-exp" / "logs" / "diff-demo.brief.log").read_text(encoding="utf-8")
+    assert result.returncode == 0
+    assert "- Detail: diff --git a/projects/conv/src/targets.py b/projects/conv/src/targets.py" in brief_log
+    assert "- Detail: index d806f6552f9ddee71a4c38b97fcb4a3189e9e58f..a9a2995f8abb0beebde0584c62e3fc477ce3af9d 100644" in brief_log
+    assert "- Detail: --- a/projects/conv/src/targets.py" in brief_log
+    assert "- Detail: +++ b/projects/conv/src/targets.py" in brief_log
+    assert "- Detail: @@ -19,6 +19,13 @@" in brief_log
+    assert "generated_code_line" not in brief_log
+    assert "return 42" not in brief_log
+    assert "Folded output lines: 3" in brief_log
+
+
 def test_no_work_and_active_run_do_not_write_run_records(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     write_project(tmp_path, "done", "- [x] Finished\n")

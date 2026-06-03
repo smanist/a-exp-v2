@@ -769,6 +769,7 @@ class BriefLogWriter:
         self.final_started = False
         self.folded_lines = 0
         self.fold_notice_written = False
+        self.in_diff_output = False
 
     def start(self, lane: Lane, timeout: int) -> None:
         self.log.write(
@@ -818,6 +819,7 @@ class BriefLogWriter:
                     self.state = "tool_output"
                     self.folded_lines = 0
                     self.fold_notice_written = False
+                    self.in_diff_output = False
                     self.log.flush()
                 else:
                     self.log.write(f"- Detail: {self._truncate(stripped, 260)}\n")
@@ -825,6 +827,11 @@ class BriefLogWriter:
             return
         if self.state == "tool_output":
             if stripped:
+                if self._is_diff_header(stripped):
+                    self.in_diff_output = True
+                    self.log.write(f"- Detail: {self._truncate(stripped, 260)}\n")
+                    self.log.flush()
+                    return
                 self.folded_lines += 1
                 if not self.fold_notice_written:
                     self.log.write("- Output: folding command output; see full log for details.\n")
@@ -876,6 +883,29 @@ class BriefLogWriter:
             self.log.flush()
         self.folded_lines = 0
         self.fold_notice_written = False
+        self.in_diff_output = False
+
+    def _is_diff_header(self, text: str) -> bool:
+        if text.startswith("diff --git "):
+            return True
+        if not self.in_diff_output:
+            return False
+        return text.startswith(
+            (
+                "index ",
+                "new file mode ",
+                "deleted file mode ",
+                "old mode ",
+                "new mode ",
+                "similarity index ",
+                "dissimilarity index ",
+                "rename from ",
+                "rename to ",
+                "--- ",
+                "+++ ",
+                "@@ ",
+            )
+        )
 
     @staticmethod
     def _truncate(text: str, limit: int) -> str:

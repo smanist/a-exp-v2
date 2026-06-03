@@ -29,10 +29,13 @@ is now blocked. If that happens, write a handoff note and stop.
 2. Read `projects/<project>/README.md` and `projects/<project>/TASKS.md`.
 3. Read any directly relevant plans, experiment records, reports, artifacts,
    budget files, and approval queue entries.
-4. Triage the selected task as `conventional`, `goal-mode`, `approval`, or
+4. For experiment-heavy work, check `protocols/registry.yaml` for an applicable
+   protocol. If one matches, read its playbook, `protocol.yaml`, experiment
+   template, and checklist before execution.
+5. Triage the selected task as `conventional`, `goal-mode`, `approval`, or
    `defer`.
-5. Execute only the selected task, or write the approval/defer/handoff record.
-6. Close out into durable memory.
+6. Execute only the selected task, or write the approval/defer/handoff record.
+7. Close out into durable memory.
 
 ## Triage
 
@@ -48,6 +51,21 @@ operations.
 Use `defer` when the task is blocked, underspecified, duplicative, low priority,
 or not currently actionable.
 
+## Protocol Use
+
+When a protocol applies:
+
+- reference the protocol id and version in the experiment record or closeout;
+- use the protocol template/checklist to shape the experiment record;
+- treat missing required protocol fields as incomplete closeout unless the
+  task is explicitly a partial handoff;
+- record protocol-specific sanity checks, artifacts, caveats, and debug anchors
+  when the protocol asks for them.
+
+If no protocol exists but the work reveals a recurring experiment pattern,
+record a follow-up task or proposal to extract one. Do not invent a new protocol
+inside an unrelated execution task unless the selected task asks for it.
+
 ## Closeout Requirement
 
 Before finishing, update durable memory under `projects/<project>/`, `reports/`,
@@ -60,6 +78,7 @@ The closeout must mention the selected task title and include:
 
 Task: <selected task title>
 Mode: conventional | goal-mode | approval | defer
+Protocol: <protocol id and version, or none>
 Status: completed | blocked | deferred | failed | partial
 Summary:
 Verification:

@@ -7,6 +7,10 @@ description: Interpret unexpected or confusing empirical results.
 
 Use this skill when results need interpretation rather than claim validation.
 
+If the result set references a protocol, read the protocol playbook,
+`protocol.yaml`, and checklist before diagnosis. Use the protocol's debug
+triggers, anchor-case policy, and diagnostics as expected-behavior references.
+
 Read the result set first. Then:
 
 1. Characterize the distribution of errors/results.
@@ -17,6 +21,7 @@ Read the result set first. Then:
    - workflow;
    - interface;
    - methodology;
+   - protocol violation or limitation;
    - human/ground truth.
 5. Assess construct, statistical, external, and ground-truth validity.
 6. Recommend concrete next steps.

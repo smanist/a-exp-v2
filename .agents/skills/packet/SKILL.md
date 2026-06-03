@@ -20,6 +20,7 @@ Read target package instructions first, then read a-exp project memory:
 - `projects/<project>/TASKS.md`
 - `projects/<project>/plans/**`
 - `projects/<project>/experiments/**/EXPERIMENT.md`
+- referenced protocol packs under `protocols/**`
 - `projects/<project>/reports/**`
 - `reports/**` when relevant
 - `modules/<project>/**` and artifact manifests when relevant
@@ -30,6 +31,8 @@ The packet should identify:
 
 - purpose;
 - mathematical/computational contract;
+- protocol id/version and protocol-derived requirements when the transfer
+  depends on a protocol-backed experiment;
 - prototype location;
 - verified behavior;
 - target package integration points;

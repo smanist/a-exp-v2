@@ -24,7 +24,12 @@ Modes:
 - Are findings supported by results?
 - Are claims attributed to the correct layer: model, workflow, interface,
   methodology, or human/ground truth?
+- If the experiment references a protocol, are the protocol design fields,
+  sanity checks, artifacts, caveats, and closeout requirements satisfied?
 - Does closeout record verification, artifacts, and follow-up tasks?
+
+If protocol requirements are missing, mark affected claims provisional or
+incomplete rather than treating the protocol reference as sufficient evidence.
 
 If results are unexpected or confusing, recommend `diagnose`.
 

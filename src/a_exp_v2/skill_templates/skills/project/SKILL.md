@@ -32,6 +32,15 @@ Keep the project mission stable unless the human explicitly changes it. Add
 context, plans, tasks, budgets, or experiment records that directly support the
 requested scope.
 
+For experiment-heavy projects or tasks, check `protocols/registry.yaml`. If an
+existing protocol fits, reference its id in the task, plan, or experiment
+record. Prefer protocol-backed experiment records for recurring experiment
+types such as convergence studies.
+
+Do not create a new protocol for one-off work. If repeated project experience
+suggests a reusable pattern, write a proposal or follow-up task to extract a
+protocol.
+
 ## Propose
 
 Agent-initiated proposals require human approval before activation. Write the

@@ -14,6 +14,7 @@ id: example-v1
 status: planned
 date: 2026-05-31
 project: my-project
+protocol: optional.protocol-id.v1
 ---
 
 # example-v1
@@ -38,6 +39,9 @@ Findings with provenance.
 
 Commands, configs, and artifact paths.
 ```
+
+Omit `protocol` when no reusable protocol applies. When present, the value
+should match an entry in `protocols/registry.yaml`.
 
 Detached or long-running experiments may also write:
 

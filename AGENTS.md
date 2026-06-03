@@ -65,6 +65,11 @@ the selected project `README.md` and `TASKS.md`. Execute only the selected task,
 then close out into durable memory under `projects/<project>/`, `reports/`, or
 `APPROVAL_QUEUE.md`.
 
+For experiment-heavy work, check `protocols/registry.yaml` for an applicable
+protocol. If one applies, read its playbook, template, and checklist before
+planning or executing the experiment, then record the protocol id in the
+experiment record and closeout.
+
 For project creation, create only the files the project currently needs. The
 minimum useful project is `projects/<project>/README.md` plus
 `projects/<project>/TASKS.md`; add plans, experiments, budgets, ledgers, and

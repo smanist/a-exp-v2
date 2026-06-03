@@ -12,6 +12,10 @@ Heavy outputs belong under:
 modules/<module>/artifacts/<experiment-id>/
 ```
 
+Before planning or running a recurring experiment type, check
+`protocols/registry.yaml`. If a protocol applies, use its playbook, template,
+and checklist, then record the protocol id in `EXPERIMENT.md` and closeout.
+
 ## Inline Execution
 
 Goal-mode tasks may run and wait for experiments inline when the expected

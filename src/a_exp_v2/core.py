@@ -377,6 +377,11 @@ Use the `workflow` skill for external-scheduler-triggered work. Select one
 runnable task from a project, triage the execution mode, complete or hand off
 that task, and close out into durable project memory.
 
+For experiment-heavy work, check `protocols/registry.yaml` for an applicable
+protocol. If one applies, read its playbook, template, and checklist before
+planning or executing the experiment, then record the protocol id in the
+experiment record and closeout.
+
 Durable memory lives under `projects/<project>/`. Runtime provenance lives under
 `.a-exp/`.
 

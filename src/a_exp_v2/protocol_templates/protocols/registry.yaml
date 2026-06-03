@@ -10,6 +10,7 @@ protocols:
     description: >
       Method- and problem-agnostic protocol for numerical convergence studies.
       It records the convergence question, refinement variable, reference
-      quantity, metrics, fairness controls, sanity checks, anomaly debugging,
-      artifacts, and closeout evidence without assuming a specific method,
-      geometry, model family, solver, or target problem.
+      quantity, metrics, fairness controls, tuning policy, repeated-trial
+      statistics, required plots, anomaly debugging, artifacts, and closeout
+      evidence without assuming a specific method, geometry, model family,
+      solver, or target problem.

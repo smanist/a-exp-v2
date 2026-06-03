@@ -37,8 +37,8 @@ deeper docs.
 - `.a-exp/logs/`: live-streamed `codex exec` stdout/stderr for each run.
 - `.a-exp/running/*.json`: active-run markers used to keep one run active at a
   time.
-- `.agents/skills/`: workflow, project, review, report, packet, and diagnose
-  skills.
+- `.agents/skills/`: workflow, project, review, report, packet, diagnose, and
+  parameter-tuning skills.
 - `protocols/`: reusable playbooks and protocol packs for recurring experiment
   types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout

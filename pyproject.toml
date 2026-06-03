@@ -29,6 +29,7 @@ where = ["src"]
 a_exp_v2 = [
   "doc_templates/**/*.md",
   "protocol_templates/**/*.md",
+  "protocol_templates/**/*.py",
   "protocol_templates/**/*.yaml",
   "skill_templates/**/*.md",
 ]

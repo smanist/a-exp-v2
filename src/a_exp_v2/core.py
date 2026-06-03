@@ -292,6 +292,8 @@ def copy_package_tree(root: Path, package_subdir: str, destination: str) -> list
 
     def copy_dir(current: Any, rel_parts: tuple[str, ...] = ()) -> None:
         for item in current.iterdir():
+            if item.name == "__pycache__" or item.name.endswith(".pyc"):
+                continue
             next_parts = (*rel_parts, item.name)
             if item.is_dir():
                 copy_dir(item, next_parts)
@@ -350,8 +352,8 @@ This repository is an a-exp-v2 workspace.
 - `.a-exp/logs/`: live-streamed `codex exec` stdout/stderr for each run.
 - `.a-exp/running/*.json`: active-run markers used to keep one run active at a
   time.
-- `.agents/skills/`: workflow, project, review, report, packet, and diagnose
-  skills.
+- `.agents/skills/`: workflow, project, review, report, packet, diagnose, and
+  parameter-tuning skills.
 - `protocols/`: reusable playbooks and protocol packs for recurring experiment
   types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout

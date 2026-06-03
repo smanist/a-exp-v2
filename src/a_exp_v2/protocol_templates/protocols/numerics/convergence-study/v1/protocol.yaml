@@ -65,6 +65,8 @@ comparison_policy:
   method_comparison_optional: true
   if_comparing_methods:
     require_same_problem_instances: true
+    require_same_dataset_when_applicable: true
+    require_same_train_test_split_when_applicable: true
     require_same_metric_definitions: true
     require_same_refinement_levels_or_explain_mismatch: true
     require_same_reference_or_truth_source: true
@@ -76,12 +78,40 @@ parameter_policy:
   record_fixed_parameters: true
   record_tuned_parameters: true
   record_search_or_selection_policy_if_tuned: true
+  record_search_budget_as_number_of_runs: true
+  record_refinement_budget_as_number_of_runs: true
   record_boundary_or_failure_cases: true
   mark_conclusions_provisional_if_selection_is_unresolved: true
   hidden_numerical_adjustments_allowed: false
   if_numerical_stabilization_is_used:
     record_value_and_reason: true
     distinguish_from_algorithmic_parameter: true
+  tuning_policy:
+    if_number_of_tuned_parameters_lte_3:
+      initial_search: grid
+      refinement: nelder_mead_like
+      require_initial_search_budget_runs: true
+    if_number_of_tuned_parameters_gt_3:
+      initial_search: random
+      refinement: nelder_mead_like_from_top_k_candidates
+      require_initial_search_budget_runs: true
+      require_top_k: true
+    require_search_history: true
+    require_selected_parameters: true
+    require_validation_metric_definition: true
+
+repeated_trials_policy:
+  if_stochastic_element_present:
+    run_multiple_trials_per_refinement_level: true
+    record_trial_count: true
+    record_seed_or_realization_ids: true
+    report_mean_and_std: true
+  stochastic_elements_include:
+    - data_sampling
+    - train_test_split_sampling
+    - random_initialization
+    - randomized_algorithm
+    - stochastic_solver_or_optimizer
 
 convergence_analysis:
   required: true
@@ -149,15 +179,39 @@ artifact_policy:
     - raw_results.csv
     - convergence_summary.csv
     - convergence_rates.csv
+    - trial_statistics.csv
   recommended_files:
     - plots_or_figures
     - environment_or_dependency_record
     - parameter_selection_summary.csv
+    - parameter_search_history.csv
     - failure_or_outlier_log.csv
   debug_files:
     - anchor_raw_results.csv
     - anchor_diagnostics.csv
     - anchor_rerun_summary.csv
+
+plot_policy:
+  required_when_applicable:
+    convergence_overlay:
+      description: >
+        Convergence plot with all compared methods overlayed, including mean
+        and standard-deviation information when repeated trials are present.
+    parameter_search:
+      description: >
+        Typical hyperparameter or parameter search result from one run at one
+        refinement level.
+      if_dimension_1d: validation_metric_curve
+      if_dimension_2d: validation_metric_contour_or_heatmap
+      if_dimension_gt_2d: validation_metric_search_history
+    method_output:
+      description: >
+        Typical method output from one run at one refinement level. If truth is
+        available, show output, truth, and error together.
+    problem_setup:
+      description: >
+        Additional plots that explain the domain, setup, geometry, data
+        distribution, boundary conditions, or other problem context.
 
 closeout_required_fields:
   - question
@@ -168,6 +222,9 @@ closeout_required_fields:
   - reference_or_truth_source
   - convergence_sanity_result
   - rate_or_trend_summary
+  - trial_count_and_statistics_if_stochastic
+  - tuning_policy_and_budget_if_tuned
+  - required_plots
   - anchor_case_if_debugged
   - root_cause_if_found
   - fix_applied_if_any

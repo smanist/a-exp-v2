@@ -12,8 +12,14 @@
 - [ ] Degenerate metric cases are handled explicitly.
 - [ ] Fixed parameters are recorded.
 - [ ] Tuned parameters and selection policy are recorded, if any.
+- [ ] Initial tuning search budget is recorded in number of runs, if tuning is
+  used.
+- [ ] Refinement tuning budget is recorded in number of runs, if tuning is
+  used.
 - [ ] Solver tolerances or stopping rules are recorded, if any.
 - [ ] Random seeds or realization policy are recorded, if randomness matters.
+- [ ] Trial count per refinement level is recorded when stochastic elements are
+  present.
 - [ ] Artifact directory and reproducibility commands are written.
 
 ## Comparison Controls
@@ -22,11 +28,34 @@ Use this section when comparing methods or conditions.
 
 - [ ] Compared methods or conditions are listed.
 - [ ] Same problem instances are used, or differences are justified.
+- [ ] Same dataset is used when applicable, or differences are justified.
+- [ ] Same train/test split is used when applicable, or differences are
+  justified.
 - [ ] Same refinement levels are used, or differences are justified.
 - [ ] Same reference source is used.
 - [ ] Same metric definitions are used.
 - [ ] Tuning budgets or selection rules are comparable or explicitly different.
 - [ ] Method-specific stabilization, failures, or caveats are recorded.
+
+## Parameter Tuning
+
+- [ ] Tuned parameter count is recorded.
+- [ ] For `<= 3` tuned parameters, budgeted grid search is run first.
+- [ ] For `> 3` tuned parameters, budgeted random search is run first.
+- [ ] Random-search top-k candidate count is recorded when applicable.
+- [ ] Nelder-Mead-like refinement is run after initial search when applicable.
+- [ ] Initial search and refinement budgets are recorded in number of runs.
+- [ ] Validation or selection metric is defined.
+- [ ] Search history is recorded.
+- [ ] Selected parameters and boundary/failed evaluations are recorded.
+
+## Repeated Trials
+
+- [ ] Multiple trials are run at each refinement level when stochastic elements
+  are present.
+- [ ] Seed or realization ids are recorded.
+- [ ] Per-trial raw results are recorded.
+- [ ] Mean and standard deviation are reported for interpreted metrics.
 
 ## Smoke Run
 
@@ -47,6 +76,22 @@ Use this section when comparing methods or conditions.
 - [ ] Resource usage or runtime is recorded if relevant.
 - [ ] Parameter selections, solver tolerances, and stabilization terms are
   recorded if relevant.
+- [ ] Trial statistics are generated when repeated trials are present.
+- [ ] Parameter-search summaries are generated when tuning is used.
+- [ ] Required plots are generated when applicable.
+
+## Plots
+
+- [ ] Convergence plot overlays all compared methods.
+- [ ] Convergence plot shows statistics when repeated trials are present.
+- [ ] A representative parameter-search plot is included when tuning is used.
+- [ ] 1D parameter searches use validation-metric curves.
+- [ ] 2D parameter searches use contours or heatmaps.
+- [ ] Higher-dimensional parameter searches use search-history plots.
+- [ ] A representative method-output plot is included.
+- [ ] If truth is available, output, truth, and error are shown together.
+- [ ] Problem setup, domain, geometry, data, or boundary-condition plots are
+  included when they clarify the study.
 
 ## Convergence Sanity Check
 

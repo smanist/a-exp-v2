@@ -32,6 +32,9 @@ Before running the study, write:
 - the primary metric and any secondary metrics;
 - what is held fixed across refinement levels;
 - whether the study compares methods or studies one method;
+- whether any method parameters are tuned, and the tuning budget in number of
+  runs;
+- whether any stochastic element requires repeated trials;
 - reproducibility commands and artifact locations.
 
 ## Standard Workflow
@@ -44,8 +47,8 @@ Before running the study, write:
    for the claimed refinement range.
 4. Define primary and secondary metrics, including units, scale, and degenerate
    cases.
-5. Record all fixed parameters, tuned parameters, solver tolerances, random
-   seeds, and realization policies.
+5. Record all fixed parameters, tuned parameters, tuning budgets, solver
+   tolerances, random seeds, and realization policies.
 6. Run a small smoke case to verify execution, metrics, artifacts, and plots.
 7. Run the planned sweep.
 8. Inspect raw results before interpreting summaries or plots.
@@ -68,6 +71,7 @@ Method comparison is optional. If the study compares methods, keep the
 comparison fair by recording:
 
 - the same problem instances or a documented reason for differences;
+- the same dataset and train/test split when those concepts apply;
 - the same metric definitions;
 - the same reference or truth source;
 - the same refinement levels, or an explicit mismatch rationale;
@@ -76,6 +80,39 @@ comparison fair by recording:
 
 Do not report a winner from only the finest level unless the full convergence
 trend supports that interpretation.
+
+## Parameter Tuning
+
+When a method has tuned parameters, count only the parameters actually selected
+from data or validation results. Record the search space, metric, budget, and
+selected values.
+
+Use this default policy unless the project gives a justified alternative:
+
+- If the number of tuned parameters is `<= 3`, run a budgeted grid search first,
+  then refine with a Nelder-Mead-like local optimizer.
+- If the number of tuned parameters is `> 3`, run a budgeted random search over
+  the parameter space, then refine with a Nelder-Mead-like optimizer initialized
+  from the top-k candidates.
+
+For grid and random search, the budget is the number of method evaluations or
+validation runs. Record the refinement budget separately. For stochastic
+studies, record whether the tuning objective uses a fixed split, averaged
+trials, or another policy.
+
+The protocol includes `helpers/tuning_plan.py` for generating budgeted initial
+search plans and for reusing a small bounded Nelder-Mead-like refinement
+routine when project code wants a generic implementation.
+
+## Repeated Trials
+
+For each refinement level, run multiple trials when stochastic elements can
+change the result, including data sampling, train/test split sampling, random
+initialization, randomized algorithms, or stochastic solvers.
+
+Record the number of trials, seed or realization ids, and the per-trial raw
+results. Report mean and standard deviation for the primary metric and any
+secondary metrics used for interpretation.
 
 ## Convergence Sanity
 
@@ -92,6 +129,23 @@ For each method or condition, check:
 - whether failures or outliers were excluded and why;
 - whether parameter or solver behavior changes with refinement;
 - whether the reference quantity is accurate enough for the claimed error.
+
+## Required Plots
+
+Include these plots when they apply:
+
+- convergence plots with all methods overlayed, including statistics when
+  repeated trials are present;
+- a typical parameter-search result from one run at one refinement level:
+  - 1D search spaces should use validation-metric curves;
+  - 2D search spaces should use validation-metric contours or heatmaps;
+  - higher-dimensional search spaces should use search-history plots;
+- typical method output from one run at one refinement level, such as
+  predictions or numerical solutions;
+- when truth is available, a combined display of method output, truth, and
+  error;
+- setup plots that explain the domain, data distribution, geometry, boundary
+  conditions, or other problem context.
 
 ## Anchor-Case Debugging
 
@@ -117,6 +171,11 @@ A convergence study closeout must say:
 - the refinement variable and levels used;
 - the primary metric and reference source;
 - the selected fit window and observed rate or trend;
+- the trial count, means, and standard deviations when stochastic elements are
+  present;
+- the tuning strategy, grid/random budget, refinement budget, and selected
+  parameters when tuning is used;
+- which required plots were produced or why a plot was not applicable;
 - whether conclusions are final or provisional;
 - which anchor case was debugged, if any;
 - the root cause of any anomaly, if found;

@@ -13,6 +13,8 @@ leave unresolved the expected conclusion.
 - Boundary, geometry, sampling, forcing, initial condition, or data-generation
   details if relevant:
 - What remains fixed across refinement levels:
+- Dataset identity or generation policy:
+- Train/test split policy:
 - Known analytic, numerical, or empirical expectations:
 
 ## Refinement Variable
@@ -47,6 +49,22 @@ For each method or condition, record:
 - random seed or realization policy:
 - known caveats:
 
+## Parameter Tuning
+
+Use this section when any method has tuned parameters.
+
+- Tuned parameter count:
+- Search space:
+- Validation or selection metric:
+- Initial search policy: grid if `<= 3` tuned parameters, random if `> 3`
+- Initial search budget, in runs:
+- Refinement policy: Nelder-Mead-like
+- Refinement budget, in runs:
+- Top-k candidates for refinement, if random search is used:
+- Search history artifact:
+- Selected parameters:
+- Boundary, failed, or invalid evaluations:
+
 ## Metrics
 
 - Primary metric:
@@ -61,6 +79,8 @@ For each method or condition, record:
 Use this section when comparing methods or conditions.
 
 - Same problem instances:
+- Same dataset, if applicable:
+- Same train/test split, if applicable:
 - Same refinement levels:
 - Same reference source:
 - Same metrics:
@@ -73,6 +93,8 @@ Use this section when comparing methods or conditions.
 - Smoke run:
 - Full run:
 - Repeated realizations:
+- Trial count per refinement level:
+- Trial seeds or realization ids:
 - Resource limits:
 - Artifact directory:
 - Reproducibility commands:
@@ -112,7 +134,21 @@ Use this section only if convergence looks suspicious.
 - Rate or trend summary:
 - Cost or resource summary:
 - Comparison summary, if applicable:
+- Trial mean/std summary, if stochastic:
+- Parameter-search summary, if tuned:
 - Failure or caveat table:
+
+## Plots
+
+Include paths and short notes.
+
+- Convergence overlay plot:
+- Statistics shown on convergence plot, if repeated trials are present:
+- Parameter-search plot from one representative run/refinement level:
+- Method-output plot from one representative run/refinement level:
+- Output/truth/error plot, if truth is available:
+- Problem setup, domain, geometry, or data plot:
+- Additional explanatory plots:
 
 ## Interpretation
 

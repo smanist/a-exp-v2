@@ -35,6 +35,7 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     assert "`projects/<project>/TASKS.md`: the project work lane" in agents_text
     assert "## Git Rule" in agents_text
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
+    assert (tmp_path / ".agents" / "skills" / "parameter-tuning" / "SKILL.md").exists()
     assert "## Git Closeout" in (
         tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
@@ -57,6 +58,15 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
         / "v1"
         / "PLAYBOOK.md"
     ).read_text(encoding="utf-8")
+    assert (
+        tmp_path
+        / "protocols"
+        / "numerics"
+        / "convergence-study"
+        / "v1"
+        / "helpers"
+        / "tuning_plan.py"
+    ).exists()
     assert (
         subprocess.run(
             ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],

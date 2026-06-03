@@ -62,6 +62,9 @@ When a protocol applies:
 - record protocol-specific sanity checks, artifacts, caveats, and debug anchors
   when the protocol asks for them.
 
+When protocol-backed work includes method parameter tuning, use the
+`parameter-tuning` skill if available.
+
 If no protocol exists but the work reveals a recurring experiment pattern,
 record a follow-up task or proposal to extract one. Do not invent a new protocol
 inside an unrelated execution task unless the selected task asks for it.

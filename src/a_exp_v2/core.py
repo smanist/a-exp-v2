@@ -126,9 +126,7 @@ def init_workspace(root: Path) -> list[Path]:
         root / ".a-exp" / "runs",
         root / ".a-exp" / "logs",
         root / ".a-exp" / "running",
-        root / ".agents" / "skills",
-        root / "docs",
-        root / "protocols",
+        root / ".agents",
         root / "projects",
         root / "modules",
         root / "reports" / "kanban",
@@ -154,9 +152,9 @@ def init_workspace(root: Path) -> list[Path]:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             created.append(path)
-    created.extend(copy_package_tree(root, "skill_templates/skills", ".agents/skills"))
-    created.extend(copy_package_tree(root, "doc_templates", "docs"))
-    created.extend(copy_package_tree(root, "protocol_templates/protocols", "protocols"))
+    created.extend(materialize_package_tree(root, "skill_templates/skills", ".agents/skills"))
+    created.extend(materialize_package_tree(root, "doc_templates", "docs"))
+    created.extend(materialize_package_tree(root, "protocol_templates/protocols", "protocols"))
     commit_created_workspace_files(root, created)
     return created
 
@@ -192,7 +190,7 @@ def commit_created_workspace_files(root: Path, created: list[Path]) -> None:
         {
             str(path.relative_to(root))
             for path in created
-            if path.exists() and not path.is_dir() and path.name != ".git"
+            if path.exists() and (path.is_symlink() or not path.is_dir()) and path.name != ".git"
         }
     )
     if not stage_paths:
@@ -283,6 +281,52 @@ def git_commit_env() -> dict[str, str]:
     env.setdefault("GIT_COMMITTER_NAME", "a-exp-v2")
     env.setdefault("GIT_COMMITTER_EMAIL", "a-exp-v2@example.local")
     return env
+
+
+def materialize_package_tree(root: Path, package_subdir: str, destination: str) -> list[Path]:
+    linked = symlink_package_tree(root, package_subdir, destination)
+    if linked is not None:
+        return [linked]
+    return copy_package_tree(root, package_subdir, destination)
+
+
+def symlink_package_tree(root: Path, package_subdir: str, destination: str) -> Path | None:
+    source = package_resource_path(package_subdir)
+    dest = root / destination
+    if source is None or os.path.lexists(dest):
+        return None
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    target = relative_symlink_target(dest.parent, source)
+    if target is None:
+        return None
+
+    try:
+        dest.symlink_to(target, target_is_directory=True)
+    except OSError:
+        return None
+    return dest
+
+
+def package_resource_path(package_subdir: str) -> Path | None:
+    source = resources.files("a_exp_v2").joinpath(package_subdir)
+    if not isinstance(source, Path):
+        return None
+    path = source.resolve()
+    return path if path.is_dir() else None
+
+
+def relative_symlink_target(dest_parent: Path, source: Path) -> str | None:
+    target = os.path.relpath(source.resolve(), dest_parent.resolve())
+    target_path = Path(target)
+    if target_path.is_absolute() or path_mentions_home_user(target_path):
+        return None
+    return target
+
+
+def path_mentions_home_user(path: Path) -> bool:
+    home_user = Path.home().name
+    return bool(home_user and home_user in path.parts)
 
 
 def copy_package_tree(root: Path, package_subdir: str, destination: str) -> list[Path]:

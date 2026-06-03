@@ -132,6 +132,26 @@ def test_init_creates_workspace_git_root_inside_parent_repo(tmp_path: Path) -> N
     )
 
 
+def test_relative_symlink_target_uses_relative_path_without_username(tmp_path: Path) -> None:
+    source = tmp_path / "a-exp-v2" / "src" / "a_exp_v2" / "doc_templates"
+    dest_parent = tmp_path / "workspace"
+    source.mkdir(parents=True)
+    dest_parent.mkdir()
+
+    target = core.relative_symlink_target(dest_parent, source)
+
+    assert target == "../a-exp-v2/src/a_exp_v2/doc_templates"
+    assert Path.home().name not in Path(target).parts
+
+
+def test_relative_symlink_target_rejects_home_username(tmp_path: Path) -> None:
+    source = Path.home() / "a-exp-v2" / "src" / "a_exp_v2" / "doc_templates"
+
+    target = core.relative_symlink_target(tmp_path, source)
+
+    assert target is None
+
+
 def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     write_project(

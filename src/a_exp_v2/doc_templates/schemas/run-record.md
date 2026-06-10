@@ -17,6 +17,9 @@ Example:
   "project": "conv",
   "task": "Implement status schema",
   "mode": "workflow-selected",
+  "execution_mode": "conventional",
+  "mode_policy": "hard",
+  "task_spec": "projects/conv/tasks/implement-status-schema.md",
   "status": "completed",
   "started_at": "2026-05-31T12:00:00Z",
   "ended_at": "2026-05-31T12:10:00Z",
@@ -43,6 +46,15 @@ Example:
 
 - `completed`: agent exited successfully and closeout validation passed.
 - `failed`: agent exited nonzero or closeout validation failed.
+
+## Execution Mode
+
+- `execution_mode`: `conventional`, `goal`, or `null` for legacy TASKS-only
+  entries that still use agent triage.
+- `mode_policy`: `hard` for spec-backed or explicitly mode-tagged entries, or
+  `null` for legacy entries.
+- `task_spec`: repo-relative task or goal spec path, or `null` for legacy
+  entries.
 
 No run record is written for skipped scheduler calls such as no runnable work or
 an already active run.

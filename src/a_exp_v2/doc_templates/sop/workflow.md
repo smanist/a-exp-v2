@@ -17,7 +17,8 @@ checklist before triage or execution.
 
 ## Triage
 
-Classify the selected task as one of:
+For spec-backed tasks, follow the selected `execution_mode` exactly. For legacy
+TASKS-only entries, classify the selected task as one of:
 
 - `conventional`
 - `goal-mode`
@@ -33,8 +34,9 @@ recurring experiment pattern, propose a follow-up task to extract one.
 
 ## Execute
 
-Run conventional work directly, or use Codex goal mode for multi-step,
-uncertain, debugging-heavy, implementation-heavy, or experiment-heavy work.
+Run conventional work directly. For goal-mode work, create or resume child task
+specs as needed and close out each meaningful checkpoint before continuing the
+parent goal.
 
 ## Closeout
 
@@ -42,6 +44,7 @@ Every executed task must end with durable closeout. At minimum record:
 
 - task;
 - execution mode;
+- mode policy, when present;
 - protocol id and version, if applicable;
 - status;
 - summary;

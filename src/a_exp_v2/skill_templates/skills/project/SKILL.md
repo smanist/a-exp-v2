@@ -21,6 +21,7 @@ Create:
 ```text
 projects/<project>/README.md
 projects/<project>/TASKS.md
+projects/<project>/tasks/ or projects/<project>/goals/ when adding runnable work
 ```
 
 Add `budget.yaml`, `ledger.yaml`, `plans/`, or `experiments/` only when the
@@ -50,20 +51,48 @@ proposal under `reports/project/` or add an entry to `APPROVAL_QUEUE.md`.
 
 Top-level tasks are scheduler and closeout units, not implementation steps.
 Prefer one top-level task for a coherent goal-mode unit. Put internal steps
-under `Done when` or in a plan. Split into multiple top-level tasks only when
-the pieces should be independently scheduled, retried, blocked, approved, or
-closed out.
+in the task or goal spec. Split into multiple top-level tasks only when the
+pieces should be independently scheduled, retried, blocked, approved, or closed
+out.
 
 When either shape is reasonable and the choice materially changes how the
 project will be operated, ask the human whether they prefer a single goal-mode
 task or a broken-down task series.
 
+New runnable work should be spec-backed. Put the visible queue item in
+`TASKS.md`, and preserve the full original prompt and hard execution mode in a
+canonical spec file.
+
 ```markdown
 - [ ] Imperative task title
-  Why: Why this matters.
-  Done when: Mechanically verifiable completion condition.
+  Spec: `projects/<project>/tasks/<task-id>.md`
+  Execution mode: conventional|goal
+  Mode policy: hard
   Priority: high|medium|low
 ```
+
+Use `projects/<project>/tasks/<task-id>.md` for `conventional` work and
+`projects/<project>/goals/<goal-id>.md` for `goal` work. Root specs must start
+with:
+
+```yaml
+---
+execution_mode: conventional|goal
+mode_policy: hard
+source: direct|scheduled|project-augment
+original_prompt_sha256: <sha256 of original prompt>
+---
+```
+
+Root specs must include:
+
+````markdown
+## Original user prompt
+
+```text
+<verbatim original prompt>
+```
+````
 
 ## Git Closeout
 

@@ -33,6 +33,9 @@ RUNNING_DIR = Path(".a-exp/running")
 TASK_RE = re.compile(r"^- \[([ xX])\]\s+(.+?)\s*$")
 BLOCKED_RE = re.compile(r"\[(?:blocked-by:\s*[^\]]+|approval-needed(?::\s*[^\]]+)?)\]", re.I)
 ACTIVE_EXPERIMENT_STATUSES = {"running", "retrying", "stopping"}
+VALID_EXECUTION_MODES = {"conventional", "goal"}
+VALID_MODE_POLICIES = {"hard"}
+VALID_TASK_SOURCES = {"direct", "scheduled", "project-augment"}
 
 
 class AExpError(Exception):
@@ -53,6 +56,24 @@ class Task:
     done: bool
     blocked: bool
     line_number: int
+    spec_path: str | None = None
+    execution_mode: str | None = None
+    mode_policy: str | None = None
+    parse_error: str | None = None
+
+
+@dataclass
+class TaskExecutionSpec:
+    title: str
+    execution_mode: str | None = None
+    mode_policy: str | None = None
+    spec_path: str | None = None
+    source: str | None = None
+    original_prompt_sha256: str | None = None
+
+    @property
+    def is_hard_mode(self) -> bool:
+        return self.execution_mode in VALID_EXECUTION_MODES and self.mode_policy == "hard"
 
 
 @dataclass
@@ -402,9 +423,13 @@ This repository is an a-exp-v2 workspace.
   types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout
   notes, and artifact references.
-- `projects/<project>/TASKS.md`: the project work lane. Unchecked tasks are
-  open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks from being
-  runnable.
+- `projects/<project>/TASKS.md`: the visible project work lane. Unchecked
+  tasks are open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks
+  from being runnable. New runnable work should point at a task or goal spec.
+- `projects/<project>/tasks/<id>.md`: canonical conventional task specs with
+  hard execution mode and verbatim original prompt.
+- `projects/<project>/goals/<id>.md`: canonical goal-mode specs. Goal runs may
+  create child task specs, but each meaningful child task needs fixed closeout.
 - `projects/<project>/plans/`: optional plans for larger work.
 - `projects/<project>/experiments/<id>/EXPERIMENT.md`: experiment design,
   results, and findings.
@@ -420,8 +445,10 @@ This repository is an a-exp-v2 workspace.
 ## Work Cycle
 
 Use the `workflow` skill for external-scheduler-triggered work. Select one
-runnable task from a project, triage the execution mode, complete or hand off
-that task, and close out into durable project memory.
+runnable task from a project, resolve its spec if present, follow hard
+`execution_mode` for spec-backed tasks, complete or hand off that task or goal,
+and close out into durable project memory. Legacy TASKS-only entries may still
+be triaged by the workflow agent.
 
 For experiment-heavy work, check `protocols/registry.yaml` for an applicable
 protocol. If one applies, read its playbook, template, and checklist before
@@ -457,20 +484,125 @@ def parse_tasks(path: Path) -> list[Task]:
     if not path.exists():
         return []
     tasks = []
+    current: Task | None = None
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         match = TASK_RE.match(line)
-        if not match:
-            continue
-        title = match.group(2).strip()
-        tasks.append(
-            Task(
+        if match:
+            title = match.group(2).strip()
+            current = Task(
                 title=title,
                 done=match.group(1).lower() == "x",
                 blocked=bool(BLOCKED_RE.search(title)),
                 line_number=line_number,
             )
-        )
+            tasks.append(current)
+            continue
+        if current is None:
+            continue
+        metadata_match = re.match(r"^\s{2,}([A-Za-z][A-Za-z -]*):\s*(.*?)\s*$", line)
+        if not metadata_match:
+            continue
+        key = metadata_match.group(1).strip().lower().replace(" ", "_")
+        value = _strip_markdown_value(metadata_match.group(2).strip())
+        if key == "spec":
+            current.spec_path = value
+        elif key == "execution_mode":
+            current.execution_mode = value
+            if value not in VALID_EXECUTION_MODES:
+                current.parse_error = f"invalid execution mode: {value}"
+                current.blocked = True
+        elif key == "mode_policy":
+            current.mode_policy = value
+            if value not in VALID_MODE_POLICIES:
+                current.parse_error = f"invalid mode policy: {value}"
+                current.blocked = True
     return tasks
+
+
+def _strip_markdown_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == "`" and value[-1] == "`":
+        return value[1:-1]
+    return value
+
+
+def resolve_task_execution_spec(root: Path, project: str, task: Task) -> TaskExecutionSpec:
+    if task.parse_error:
+        raise WorkspaceError(
+            f"Invalid task metadata in projects/{project}/TASKS.md:{task.line_number}: {task.parse_error}"
+        )
+
+    resolved = TaskExecutionSpec(
+        title=task.title,
+        execution_mode=task.execution_mode,
+        mode_policy=task.mode_policy,
+        spec_path=task.spec_path,
+    )
+    if not task.spec_path:
+        if resolved.execution_mode is not None and resolved.mode_policy is None:
+            resolved.mode_policy = "hard"
+        return resolved
+
+    spec_path = Path(task.spec_path)
+    if spec_path.is_absolute() or ".." in spec_path.parts:
+        raise WorkspaceError(
+            f"Invalid spec path for task {task.title!r}: spec paths must be repo-relative and stay inside the workspace"
+        )
+    full_path = root / spec_path
+    if not full_path.exists() or not full_path.is_file():
+        raise WorkspaceError(f"Task spec not found for task {task.title!r}: {task.spec_path}")
+    spec_text = full_path.read_text(encoding="utf-8")
+    if not re.search(r"(?im)^##\s+Original user prompt\s*$", spec_text):
+        raise WorkspaceError(f"Task spec {task.spec_path} missing required section: Original user prompt")
+
+    frontmatter = parse_spec_frontmatter(full_path)
+    required = ["execution_mode", "mode_policy", "source", "original_prompt_sha256"]
+    missing = [key for key in required if not frontmatter.get(key)]
+    if missing:
+        raise WorkspaceError(
+            f"Task spec {task.spec_path} missing required field(s): {', '.join(missing)}"
+        )
+
+    spec_mode = frontmatter["execution_mode"]
+    if spec_mode not in VALID_EXECUTION_MODES:
+        raise WorkspaceError(f"Task spec {task.spec_path} has invalid execution_mode: {spec_mode}")
+    if resolved.execution_mode and resolved.execution_mode != spec_mode:
+        raise WorkspaceError(
+            f"Task {task.title!r} execution mode {resolved.execution_mode!r} "
+            f"does not match spec mode {spec_mode!r}"
+        )
+
+    spec_policy = frontmatter["mode_policy"]
+    if spec_policy not in VALID_MODE_POLICIES:
+        raise WorkspaceError(f"Task spec {task.spec_path} has invalid mode_policy: {spec_policy}")
+    if resolved.mode_policy and resolved.mode_policy != spec_policy:
+        raise WorkspaceError(
+            f"Task {task.title!r} mode policy {resolved.mode_policy!r} "
+            f"does not match spec policy {spec_policy!r}"
+        )
+
+    source = frontmatter["source"]
+    if source not in VALID_TASK_SOURCES:
+        raise WorkspaceError(f"Task spec {task.spec_path} has invalid source: {source}")
+
+    resolved.execution_mode = spec_mode
+    resolved.mode_policy = spec_policy
+    resolved.source = source
+    resolved.original_prompt_sha256 = frontmatter["original_prompt_sha256"]
+    return resolved
+
+
+def parse_spec_frontmatter(path: Path) -> dict[str, str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    data: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+        if match:
+            data[match.group(1).strip()] = _strip_markdown_value(match.group(2).strip())
+    return data
 
 
 def _active_run_by_project(root: Path) -> dict[str, str]:
@@ -679,6 +811,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
     task = lane.first_runnable_task
     if task is None:
         return None
+    execution_spec = resolve_task_execution_spec(root, lane.project, task)
 
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
     run_path = root / RUNS_DIR / f"{run_id}.json"
@@ -690,6 +823,9 @@ def run_once(root: Path) -> dict[str, Any] | None:
         "run_id": run_id,
         "project": lane.project,
         "task": task.title,
+        "execution_mode": execution_spec.execution_mode,
+        "mode_policy": execution_spec.mode_policy,
+        "task_spec": execution_spec.spec_path,
         "pid": os.getpid(),
         "started_at": started_at,
         "log_file": str(log_path.relative_to(root)),
@@ -699,16 +835,19 @@ def run_once(root: Path) -> dict[str, Any] | None:
     marker_path.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
     before = durable_memory_snapshot(root, lane.project)
     try:
-        prompt = workflow_prompt(lane, task)
+        prompt = workflow_prompt(lane, task, execution_spec)
         result = launch_agent(root, prompt, lane, log_path)
         after = durable_memory_snapshot(root, lane.project)
-        validation = validate_closeout(before, after, task.title)
+        validation = validate_closeout(before, after, task.title, execution_spec)
         status = "completed" if result.returncode == 0 and validation["ok"] else "failed"
         record = {
             "run_id": run_id,
             "project": lane.project,
             "task": task.title,
             "mode": "workflow-selected",
+            "execution_mode": execution_spec.execution_mode,
+            "mode_policy": execution_spec.mode_policy,
+            "task_spec": execution_spec.spec_path,
             "status": status,
             "started_at": started_at,
             "ended_at": utc_now(),
@@ -757,6 +896,7 @@ def validate_closeout(
     before: dict[str, dict[str, str]],
     after: dict[str, dict[str, str]],
     task_title: str,
+    execution_spec: TaskExecutionSpec | None = None,
 ) -> dict[str, Any]:
     changed = sorted(
         path for path, item in after.items()
@@ -784,6 +924,12 @@ def validate_closeout(
         "outcome_recorded": outcome_recorded,
         "verification_recorded": verification_recorded,
     }
+    if execution_spec is not None and execution_spec.is_hard_mode:
+        checks["mode_closeout_valid"] = validate_mode_closeout(
+            changed_text,
+            task_title,
+            execution_spec.execution_mode or "",
+        )
     ok = all(checks.values())
     return {
         "ok": ok,
@@ -793,18 +939,81 @@ def validate_closeout(
     }
 
 
-def workflow_prompt(lane: Lane, task: Task) -> str:
-    return "\n".join(
-        [
-            "Run one a-exp-v2 workflow cycle.",
-            f"Project: {lane.project}",
-            f"Selected task: {task.title}",
-            "",
-            "Use the workflow skill if available. Orient on the project README and TASKS.md, triage conventional vs goal-mode vs approval vs defer, execute only this task, and close out into durable project memory.",
-            "Do not chain into follow-up tasks unless the human explicitly requested continued work.",
-            "Record verification evidence and artifacts in project memory.",
-        ]
+def validate_mode_closeout(changed_text: str, task_title: str, expected_mode: str) -> bool:
+    status = closeout_status(changed_text)
+    if status in {"approval", "defer", "deferred", "blocked"}:
+        return True
+    if expected_mode == "conventional":
+        return bool(re.search(r"(?im)^\s*Mode:\s*conventional\s*$", changed_text))
+    if expected_mode == "goal":
+        parent_goal = bool(
+            re.search(r"(?ims)^##\s+Goal closeout\b.*?^\s*Mode:\s*(goal|goal-mode)\s*$", changed_text)
+            or re.search(r"(?im)^\s*Mode:\s*(goal|goal-mode)\s*$", changed_text)
+        )
+        child_task = bool(
+            re.search(r"(?im)^\s*Mode:\s*goal-mode-child\s*$", changed_text)
+            and re.search(r"(?im)^\s*Parent goal:\s*", changed_text)
+        )
+        return parent_goal and child_task and task_title in changed_text
+    return False
+
+
+def closeout_status(changed_text: str) -> str | None:
+    match = re.search(
+        r"(?im)^\s*(?:Status|Outcome):\s*(approval|defer|deferred|blocked|completed|failed|partial)\b",
+        changed_text,
     )
+    return match.group(1).lower() if match else None
+
+
+def workflow_prompt(lane: Lane, task: Task, execution_spec: TaskExecutionSpec | None = None) -> str:
+    spec = execution_spec or TaskExecutionSpec(title=task.title)
+    lines = [
+        "Run one a-exp-v2 workflow cycle.",
+        f"Project: {lane.project}",
+        f"Selected task: {task.title}",
+    ]
+    if spec.execution_mode:
+        lines.extend(
+            [
+                f"Execution mode: {spec.execution_mode}",
+                f"Mode policy: {spec.mode_policy or 'hard'}",
+            ]
+        )
+    else:
+        lines.append("Execution mode: legacy agent triage")
+    if spec.spec_path:
+        spec_label = "Goal spec" if spec.execution_mode == "goal" else "Task spec"
+        lines.append(f"{spec_label}: {spec.spec_path}")
+    lines.append("")
+    if spec.is_hard_mode and spec.execution_mode == "conventional":
+        lines.extend(
+            [
+                "Use the workflow skill if available. Read the task spec if present, including the verbatim original user prompt.",
+                "Execute exactly this conventional task and write fixed task closeout into durable project memory.",
+                "Do not create child task specs or execute follow-up tasks; record follow-ups in TASKS.md.",
+                "If execution requires approval, should be deferred, or is blocked, write that closeout instead of changing modes.",
+            ]
+        )
+    elif spec.is_hard_mode and spec.execution_mode == "goal":
+        lines.extend(
+            [
+                "Use the workflow skill if available. Read the goal spec, including the verbatim original user prompt.",
+                "Create or resume bounded child task specs as needed under this selected goal.",
+                "After each meaningful child task, write fixed child task closeout with Mode: goal-mode-child and Parent goal.",
+                "Finish with a fixed Goal closeout that records whether the goal succeeded, blocked, or exhausted budget.",
+                "Do not execute work outside this selected goal.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Use the workflow skill if available. Orient on the project README and TASKS.md, triage conventional vs goal-mode vs approval vs defer, execute only this task, and close out into durable project memory.",
+                "Do not chain into follow-up tasks unless the human explicitly requested continued work.",
+            ]
+        )
+    lines.append("Record verification evidence and artifacts in project memory.")
+    return "\n".join(lines)
 
 
 def brief_log_path_for(log_path: Path) -> Path:

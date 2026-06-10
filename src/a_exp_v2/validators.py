@@ -6,6 +6,8 @@ from typing import Any
 JOB_STATES = {"disabled", "running", "runnable", "blocked", "empty", "invalid"}
 HEALTH_VALUES = {"ok", "degraded"}
 RUN_STATUSES = {"completed", "failed"}
+EXECUTION_MODES = {"conventional", "goal", None}
+MODE_POLICIES = {"hard", None}
 
 
 def validate_status_json(data: dict[str, Any]) -> list[str]:
@@ -90,6 +92,12 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
             errors.append(f"missing run field: {key}")
     if data.get("status") not in RUN_STATUSES:
         errors.append("status must be completed or failed")
+    if data.get("execution_mode") not in EXECUTION_MODES:
+        errors.append("execution_mode must be conventional, goal, or null")
+    if data.get("mode_policy") not in MODE_POLICIES:
+        errors.append("mode_policy must be hard or null")
+    if "task_spec" in data and data.get("task_spec") is not None and not isinstance(data.get("task_spec"), str):
+        errors.append("task_spec must be a string or null")
     closeout = data.get("closeout_validation")
     if not isinstance(closeout, dict):
         return errors + ["closeout_validation must be an object"]

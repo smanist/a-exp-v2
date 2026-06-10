@@ -6,7 +6,11 @@ Tasks live in:
 projects/<project>/TASKS.md
 ```
 
-Shape:
+`TASKS.md` is the visible scheduler queue. New tasks should point at a
+canonical task or goal spec so the original prompt and hard execution mode are
+preserved.
+
+Legacy shape:
 
 ```markdown
 - [ ] Imperative task title
@@ -14,6 +18,39 @@ Shape:
   Done when: Mechanically verifiable completion condition.
   Priority: high|medium|low
 ```
+
+Spec-backed shape:
+
+```markdown
+- [ ] Imperative task title
+  Spec: `projects/<project>/tasks/<task-id>.md`
+  Execution mode: conventional|goal
+  Mode policy: hard
+  Priority: high|medium|low
+```
+
+Goal-mode queue entries should point at `projects/<project>/goals/<goal-id>.md`.
+
+Spec files start with frontmatter:
+
+```yaml
+---
+execution_mode: conventional|goal
+mode_policy: hard
+source: direct|scheduled|project-augment
+original_prompt_sha256: <sha256>
+---
+```
+
+Root task and goal specs preserve the original prompt verbatim under:
+
+````markdown
+## Original user prompt
+
+```text
+...
+```
+````
 
 Completed tasks use `[x]`.
 

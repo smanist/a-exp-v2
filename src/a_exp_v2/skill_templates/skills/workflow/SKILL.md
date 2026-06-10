@@ -19,9 +19,16 @@ The prompt names:
 
 - `Project: <project>`
 - `Selected task: <task title>`
+- `Execution mode: conventional|goal`, or `legacy agent triage`
+- `Mode policy: hard`, for spec-backed or explicitly mode-tagged tasks
+- `Task spec:` or `Goal spec:`, when present
 
 Do not switch to another task unless the selected task is no longer present or
 is now blocked. If that happens, write a handoff note and stop.
+
+When the prompt includes `Mode policy: hard`, do not silently switch between
+`conventional` and `goal`. You may stop for approval, defer, or mark blocked
+when required.
 
 ## Steps
 
@@ -32,9 +39,11 @@ is now blocked. If that happens, write a handoff note and stop.
 4. For experiment-heavy work, check `protocols/registry.yaml` for an applicable
    protocol. If one matches, read its playbook, `protocol.yaml`, experiment
    template, and checklist before execution.
-5. Triage the selected task as `conventional`, `goal-mode`, `approval`, or
-   `defer`.
-6. Execute only the selected task, or write the approval/defer/handoff record.
+5. For legacy tasks, triage the selected task as `conventional`, `goal-mode`,
+   `approval`, or `defer`. For hard-mode tasks, follow the selected execution
+   mode exactly.
+6. Execute only the selected task or goal, or write the approval/defer/handoff
+   record.
 7. Close out into durable memory.
 
 ## Triage
@@ -43,6 +52,11 @@ Use `conventional` for small, deterministic, low-risk work.
 
 Use `goal-mode` for multi-step, uncertain, debugging-heavy,
 implementation-heavy, or experiment-heavy work.
+
+For hard goal-mode work, create or resume bounded child task specs under the
+selected goal. After each meaningful child task, write fixed child closeout
+with `Mode: goal-mode-child` and `Parent goal: <selected task title>`, then
+finish with `## Goal closeout`.
 
 Use `approval` when the task needs human approval, credentials, major compute,
 budget commitment, governance changes, substantial deletion, or irreversible
@@ -80,7 +94,9 @@ The closeout must mention the selected task title and include:
 ## Task closeout
 
 Task: <selected task title>
-Mode: conventional | goal-mode | approval | defer
+Mode: conventional | goal | goal-mode | goal-mode-child | approval | defer
+Mode policy: hard | none
+Parent goal: <selected task title, or none>
 Protocol: <protocol id and version, or none>
 Status: completed | blocked | deferred | failed | partial
 Summary:

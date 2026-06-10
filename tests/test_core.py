@@ -32,7 +32,8 @@ def test_init_does_not_create_self_project(tmp_path: Path) -> None:
     assert (tmp_path / "APPROVAL_QUEUE.md").exists()
     agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "## Fast Orientation" in agents_text
-    assert "`projects/<project>/TASKS.md`: the project work lane" in agents_text
+    assert "`projects/<project>/TASKS.md`: the visible project work lane" in agents_text
+    assert "`projects/<project>/goals/<id>.md`: canonical goal-mode specs" in agents_text
     assert "## Git Rule" in agents_text
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
     assert (tmp_path / ".agents" / "skills" / "parameter-tuning" / "SKILL.md").exists()
@@ -194,6 +195,112 @@ def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:
     assert "next_run_at" not in item
 
 
+def test_parse_tasks_preserves_legacy_tasks_and_reads_spec_metadata(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "TASKS.md"
+    tasks_path.write_text(
+        "\n".join(
+            [
+                "# Tasks",
+                "",
+                "- [ ] Legacy task",
+                "  Why: old shape",
+                "- [ ] Spec backed task",
+                "  Spec: `projects/demo/tasks/spec-backed.md`",
+                "  Execution mode: goal",
+                "  Mode policy: hard",
+                "  Priority: high",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    legacy, spec_backed = core.parse_tasks(tasks_path)
+
+    assert legacy.title == "Legacy task"
+    assert legacy.spec_path is None
+    assert legacy.execution_mode is None
+    assert spec_backed.title == "Spec backed task"
+    assert spec_backed.spec_path == "projects/demo/tasks/spec-backed.md"
+    assert spec_backed.execution_mode == "goal"
+    assert spec_backed.mode_policy == "hard"
+
+
+def test_parse_tasks_blocks_invalid_execution_mode(tmp_path: Path) -> None:
+    tasks_path = tmp_path / "TASKS.md"
+    tasks_path.write_text("- [ ] Bad mode\n  Execution mode: improvise\n", encoding="utf-8")
+
+    task = core.parse_tasks(tasks_path)[0]
+
+    assert task.blocked is True
+    assert task.parse_error == "invalid execution mode: improvise"
+
+
+def test_resolve_task_execution_spec_validates_frontmatter(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_project(
+        tmp_path,
+        "demo",
+        "\n".join(
+            [
+                "- [ ] Run spec task",
+                "  Spec: `projects/demo/tasks/run-spec-task.md`",
+                "  Execution mode: conventional",
+                "  Mode policy: hard",
+            ]
+        ),
+    )
+    spec_path = tmp_path / "projects" / "demo" / "tasks" / "run-spec-task.md"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(
+        "\n".join(
+            [
+                "---",
+                "execution_mode: conventional",
+                "mode_policy: hard",
+                "source: project-augment",
+                "original_prompt_sha256: abc123",
+                "---",
+                "# Run spec task",
+                "",
+                "## Original user prompt",
+                "```text",
+                "do the work",
+                "```",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    task = core.discover_lanes(tmp_path)[0].tasks[0]
+    resolved = core.resolve_task_execution_spec(tmp_path, "demo", task)
+
+    assert resolved.execution_mode == "conventional"
+    assert resolved.mode_policy == "hard"
+    assert resolved.spec_path == "projects/demo/tasks/run-spec-task.md"
+    assert resolved.source == "project-augment"
+    assert resolved.original_prompt_sha256 == "abc123"
+
+
+def test_resolve_task_execution_spec_rejects_invalid_spec_mode(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_project(
+        tmp_path,
+        "demo",
+        "- [ ] Run bad spec\n  Spec: `projects/demo/tasks/bad.md`\n",
+    )
+    spec_path = tmp_path / "projects" / "demo" / "tasks" / "bad.md"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(
+        "---\nexecution_mode: freestyle\nmode_policy: hard\nsource: direct\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\nbad\n```\n",
+        encoding="utf-8",
+    )
+
+    task = core.discover_lanes(tmp_path)[0].tasks[0]
+
+    with pytest.raises(core.WorkspaceError, match="invalid execution_mode"):
+        core.resolve_task_execution_spec(tmp_path, "demo", task)
+
+
 def test_enable_disable_requires_existing_project(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     write_project(tmp_path, "demo", "- [ ] Ready\n")
@@ -311,6 +418,151 @@ def test_run_once_records_success_when_project_memory_changes(
         ).stdout.strip()
         == ""
     )
+
+
+def test_run_once_prompt_includes_conventional_spec_hard_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_project(
+        tmp_path,
+        "demo",
+        "\n".join(
+            [
+                "- [ ] Ready",
+                "  Spec: `projects/demo/tasks/ready.md`",
+                "  Execution mode: conventional",
+                "  Mode policy: hard",
+            ]
+        ),
+    )
+    spec_path = tmp_path / "projects" / "demo" / "tasks" / "ready.md"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(
+        "---\nexecution_mode: conventional\nmode_policy: hard\nsource: scheduled\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\nready\n```\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, str] = {}
+
+    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
+        captured["prompt"] = prompt
+        readme = root / "projects" / lane.project / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            + "\n## Task closeout\n\n"
+            + "Task: Ready\n"
+            + "Mode: conventional\n"
+            + "Status: completed\n"
+            + "Verification:\n"
+            + "- Command: pytest\n"
+            + "- Result: passed\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
+
+    monkeypatch.setattr(core, "launch_agent", fake_agent)
+    record = core.run_once(tmp_path)
+
+    assert record is not None
+    assert record["execution_mode"] == "conventional"
+    assert record["mode_policy"] == "hard"
+    assert record["task_spec"] == "projects/demo/tasks/ready.md"
+    assert "Execution mode: conventional" in captured["prompt"]
+    assert "Mode policy: hard" in captured["prompt"]
+    assert "Task spec: projects/demo/tasks/ready.md" in captured["prompt"]
+
+
+def test_run_once_prompt_includes_goal_spec_hard_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_project(
+        tmp_path,
+        "demo",
+        "\n".join(
+            [
+                "- [ ] Pursue goal",
+                "  Spec: `projects/demo/goals/pursue-goal.md`",
+                "  Execution mode: goal",
+                "  Mode policy: hard",
+            ]
+        ),
+    )
+    spec_path = tmp_path / "projects" / "demo" / "goals" / "pursue-goal.md"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(
+        "---\nexecution_mode: goal\nmode_policy: hard\nsource: scheduled\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\npursue goal\n```\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, str] = {}
+
+    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
+        captured["prompt"] = prompt
+        readme = root / "projects" / lane.project / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            + "\n## Task closeout\n\n"
+            + "Task: Child checkpoint\n"
+            + "Parent goal: Pursue goal\n"
+            + "Mode: goal-mode-child\n"
+            + "Status: completed\n"
+            + "Verification:\n"
+            + "- Command: pytest\n"
+            + "- Result: passed\n"
+            + "\n## Goal closeout\n\n"
+            + "Task: Pursue goal\n"
+            + "Mode: goal\n"
+            + "Status: completed\n"
+            + "Verification:\n"
+            + "- Command: pytest\n"
+            + "- Result: passed\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
+
+    monkeypatch.setattr(core, "launch_agent", fake_agent)
+    record = core.run_once(tmp_path)
+
+    assert record is not None
+    assert record["execution_mode"] == "goal"
+    assert "Execution mode: goal" in captured["prompt"]
+    assert "Mode policy: hard" in captured["prompt"]
+    assert "Goal spec: projects/demo/goals/pursue-goal.md" in captured["prompt"]
+    assert "Mode: goal-mode-child" in captured["prompt"]
+
+
+def test_run_once_fails_when_hard_mode_closeout_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_project(
+        tmp_path,
+        "demo",
+        "- [ ] Ready\n  Execution mode: conventional\n",
+    )
+
+    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
+        readme = root / "projects" / lane.project / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            + "\n## Task closeout\n\n"
+            + "Task: Ready\n"
+            + "Mode: goal\n"
+            + "Status: completed\n"
+            + "Verification:\n"
+            + "- Command: pytest\n"
+            + "- Result: passed\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
+
+    monkeypatch.setattr(core, "launch_agent", fake_agent)
+
+    with pytest.raises(core.AgentRunFailed):
+        core.run_once(tmp_path)
+
+    run_data = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
+    assert run_data["closeout_validation"]["checks"]["mode_closeout_valid"] is False
 
 
 def test_run_once_fails_closeout_when_project_memory_does_not_change(

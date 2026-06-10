@@ -10,14 +10,16 @@ work exists in the current repo and, when asked, executes one project work lane.
 
 ## Concepts
 
-- A `task` is the durable repo-level unit of work, stored in
-  `projects/<project>/TASKS.md`.
+- A `task` is the durable repo-level unit of work. `TASKS.md` is the visible
+  project queue; spec-backed tasks preserve full execution intent under
+  `projects/<project>/tasks/` or `projects/<project>/goals/`.
 - A `project work lane` is a project-level queue of tasks.
 - An enabled lane is eligible for `run-once`.
 - A disabled lane remains visible in status but is excluded from selection.
 - A `job` is the scheduler-facing JSON term for a project work lane.
-- A conventional session and a goal-mode task are execution modes selected by
-  the agent workflow, not durable queue types.
+- `conventional` and `goal` are execution modes. For spec-backed tasks the mode
+  is a hard directive stored in the task or goal spec; legacy TASKS-only items
+  remain agent-triaged for backward compatibility.
 - A `protocol` is a reusable playbook and requirements pack for a recurring
   experiment type, stored under `protocols/` and referenced by experiment
   records when applicable.
@@ -45,7 +47,8 @@ The external scheduler owns:
 The workflow skill owns:
 
 - orienting on project memory;
-- triaging conventional vs goal-mode vs approval vs defer;
+- following hard execution mode for spec-backed tasks, or triaging legacy tasks
+  as conventional vs goal-mode vs approval vs defer;
 - executing the selected task;
 - closing out into durable repo memory.
 
@@ -76,6 +79,10 @@ projects/
   <project>/
     README.md
     TASKS.md
+    tasks/
+      <task-id>.md
+    goals/
+      <goal-id>.md
     budget.yaml
     ledger.yaml
     experiments/

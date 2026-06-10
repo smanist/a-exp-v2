@@ -43,9 +43,13 @@ deeper docs.
   types.
 - `projects/<project>/README.md`: durable project context, decisions, closeout
   notes, and artifact references.
-- `projects/<project>/TASKS.md`: the project work lane. Unchecked tasks are
-  open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks from being
-  runnable.
+- `projects/<project>/TASKS.md`: the visible project work lane. Unchecked
+  tasks are open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks
+  from being runnable. New runnable work should point at a task or goal spec.
+- `projects/<project>/tasks/<id>.md`: canonical conventional task specs with
+  hard execution mode and verbatim original prompt.
+- `projects/<project>/goals/<id>.md`: canonical goal-mode specs. Goal runs may
+  create child task specs, but each meaningful child task needs fixed closeout.
 - `projects/<project>/plans/`: optional plans for larger work.
 - `projects/<project>/experiments/<id>/EXPERIMENT.md`: experiment design,
   results, and findings.
@@ -72,8 +76,8 @@ experiment record and closeout.
 
 For project creation, create only the files the project currently needs. The
 minimum useful project is `projects/<project>/README.md` plus
-`projects/<project>/TASKS.md`; add plans, experiments, budgets, ledgers, and
-reports when the task actually needs them.
+`projects/<project>/TASKS.md`; add spec files, plans, experiments, budgets,
+ledgers, and reports when the task actually needs them.
 
 ## Git Rule
 

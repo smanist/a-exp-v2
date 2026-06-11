@@ -427,7 +427,7 @@ This repository is an a-exp-v2 workspace.
   tasks are open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks
   from being runnable. New runnable work should point at a task or goal spec.
 - `projects/<project>/tasks/<id>.md`: canonical conventional task specs with
-  hard execution mode and verbatim original prompt.
+  hard execution mode and recorded original prompt.
 - `projects/<project>/goals/<id>.md`: canonical goal-mode specs. Goal runs may
   create child task specs, but each meaningful child task needs fixed closeout.
 - `projects/<project>/plans/`: optional plans for larger work.
@@ -989,7 +989,7 @@ def workflow_prompt(lane: Lane, task: Task, execution_spec: TaskExecutionSpec | 
     if spec.is_hard_mode and spec.execution_mode == "conventional":
         lines.extend(
             [
-                "Use the workflow skill if available. Read the task spec if present, including the verbatim original user prompt.",
+                "Use the workflow skill if available. Read the task spec if present, including the recorded original user prompt.",
                 "Execute exactly this conventional task and write fixed task closeout into durable project memory.",
                 "Do not create child task specs or execute follow-up tasks; record follow-ups in TASKS.md.",
                 "If execution requires approval, should be deferred, or is blocked, write that closeout instead of changing modes.",
@@ -998,7 +998,7 @@ def workflow_prompt(lane: Lane, task: Task, execution_spec: TaskExecutionSpec | 
     elif spec.is_hard_mode and spec.execution_mode == "goal":
         lines.extend(
             [
-                "Use the workflow skill if available. Read the goal spec, including the verbatim original user prompt.",
+                "Use the workflow skill if available. Read the goal spec, including the recorded original user prompt.",
                 "Create or resume bounded child task specs as needed under this selected goal.",
                 "After each meaningful child task, write fixed child task closeout with Mode: goal-mode-child and Parent goal.",
                 "Finish with a fixed Goal closeout that records whether the goal succeeded, blocked, or exhausted budget.",

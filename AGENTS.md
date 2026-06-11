@@ -47,7 +47,7 @@ deeper docs.
   tasks are open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks
   from being runnable. New runnable work should point at a task or goal spec.
 - `projects/<project>/tasks/<id>.md`: canonical conventional task specs with
-  hard execution mode and verbatim original prompt.
+  hard execution mode and recorded original prompt.
 - `projects/<project>/goals/<id>.md`: canonical goal-mode specs. Goal runs may
   create child task specs, but each meaningful child task needs fixed closeout.
 - `projects/<project>/plans/`: optional plans for larger work.

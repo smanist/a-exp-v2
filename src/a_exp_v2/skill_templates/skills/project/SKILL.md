@@ -90,9 +90,15 @@ Root specs must include:
 ## Original user prompt
 
 ```text
-<verbatim original prompt>
+<recorded original prompt>
 ```
 ````
+
+When recording the original prompt, normalize skill invocation links before
+writing the prompt or hashing it: collapse links that point at a `SKILL.md`
+file to a skill-name alias. For example,
+`[$project](/path/to/skills/project/SKILL.md)` becomes `[project]`. Preserve all
+other prompt text verbatim.
 
 ## Git Closeout
 

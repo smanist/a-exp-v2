@@ -42,7 +42,7 @@ original_prompt_sha256: <sha256>
 ---
 ```
 
-Root task and goal specs preserve the original prompt verbatim under:
+Root task and goal specs preserve the original prompt under:
 
 ````markdown
 ## Original user prompt
@@ -51,6 +51,11 @@ Root task and goal specs preserve the original prompt verbatim under:
 ...
 ```
 ````
+
+Before recording or hashing the prompt, normalize skill invocation links that
+point at `SKILL.md` files to skill-name aliases. For example,
+`[$project](/path/to/skills/project/SKILL.md)` is stored as `[project]`.
+Preserve all other prompt text verbatim.
 
 Completed tasks use `[x]`.
 

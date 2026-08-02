@@ -1,36 +1,18 @@
 # Scheduler Status SOP
 
-The external scheduler uses only the public CLI contract:
-
-```bash
-a-exp-v2 status --json
-```
-
-It should call:
-
-```bash
-a-exp-v2 run-once
-```
-
-when all are true:
+An external scheduler should run `a-exp status --json` and invoke
+`a-exp run-once` only when:
 
 ```text
 health == "ok"
 sessions.active == 0
-jobs.runnable > 0
+work.runnable > 0
 ```
 
-No due-time or schedule field is part of the `a-exp-v2` execution gate. Cadence
-belongs to the external scheduler.
+Keep the scheduler lease for the entire synchronous command. `run-once` returns
+after the Codex turn and closeout finish. Exit `0` means no work or valid
+closeout; exit `1` means execution, process-control, validation, or closeout
+failure; exit `2` means invalid workspace/configuration.
 
-## Command Outcomes
-
-- No runnable work: print `No runnable work.` and exit `0`.
-- Existing active run: print `Run already active.` and exit `0`.
-- Completed agent run: write `.a-exp/runs/<run-id>.json` and exit `0`.
-- Failed agent run or failed closeout validation: write the run record and exit
-  nonzero.
-- Workspace or config error: exit nonzero.
-
-The scheduler should not inspect `.a-exp/runs/`, `.a-exp/running/`, or project
-files directly. `status --json` is the public API.
+On SIGINT or SIGTERM, forward the signal to the `a-exp` process group, wait up
+to 60 seconds, force-kill if needed, and release the lease only after exit.

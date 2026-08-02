@@ -5,7 +5,7 @@ description: Plan and document protocol-standard parameter tuning for convergenc
 
 # Parameter Tuning
 
-Use this skill when a convergence-study protocol or experiment task needs a
+Use this skill when a convergence-study protocol or study experiment needs a
 method parameter or hyperparameter selection plan.
 
 ## Inputs

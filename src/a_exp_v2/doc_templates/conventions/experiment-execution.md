@@ -1,34 +1,18 @@
 # Experiment Execution
 
-Experiments are recorded under:
+Autonomous sessions may run multiple coherent experiments when they advance the
+active study goal. Experiments must remain foreground children of the Codex
+turn; detached launches and PID adoption are not supported in this revision.
 
-```text
-projects/<project>/experiments/<experiment-id>/EXPERIMENT.md
-```
+Before execution, consult `protocols/registry.yaml`. When a protocol applies,
+use its playbook, schema, template, and checklist and record its id/version in
+the experiment memory.
 
-Heavy outputs belong under:
+Record enough durable information to reproduce and interpret each experiment:
+question, configuration, code revision, environment, commands, metrics,
+artifacts, findings, caveats, and verification. Commit after each material
+experiment. A session may then use those findings to choose another experiment
+within the goal's autonomy envelope.
 
-```text
-modules/<module>/artifacts/<experiment-id>/
-```
-
-Before planning or running a recurring experiment type, check
-`protocols/registry.yaml`. If a protocol applies, use its playbook, template,
-and checklist, then record the protocol id in `EXPERIMENT.md` and closeout.
-
-## Inline Execution
-
-Goal-mode tasks may run and wait for experiments inline when the expected
-duration fits the Codex execution budget. The same task should inspect results,
-write findings, and close out.
-
-## Detached Execution
-
-Long mechanical experiments may be launched as detached non-agent processes.
-Detached execution is a convention/tool, not daemon or subagent orchestration.
-
-A detached experiment should write `progress.json`, logs, and artifacts. A
-later task can inspect completed results and close out findings.
-
-`a-exp-v2 status` reports running experiments by scanning `progress.json` files
-with `status` equal to `running`, `retrying`, or `stopping`.
+If an experiment cannot safely finish within the session budget, stop it and
+request an appropriate next state. Do not leave unmanaged work running.

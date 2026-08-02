@@ -14,8 +14,8 @@ Shape:
 ## Pending
 
 - [ ] approval-id: Short title
-  Project: <project>
-  Requested by: <task or run id>
+  Study: <study>
+  Requested by: <run id or interactive session>
   Reason: <why approval is needed>
   Decision needed: <specific human decision>
   Risk: <risk or cost>

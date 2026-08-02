@@ -8,5 +8,6 @@ Budget support is lightweight and repo-local.
 - `a-exp-v2` does not audit external providers.
 - `a-exp-v2` does not enforce provider-backed spend.
 
-Tasks that require significant budget or compute should use approval triage and
-write a request to `APPROVAL_QUEUE.md`.
+Studies that require significant budget or compute outside their autonomy
+envelope should move to `needs_human` and write a request to
+`APPROVAL_QUEUE.md`.

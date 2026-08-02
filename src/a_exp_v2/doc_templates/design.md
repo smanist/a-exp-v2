@@ -1,102 +1,57 @@
 # Design
 
-`a-exp-v2` is a repo-local memory and operations layer for recurring
-Codex-assisted work. The repository is the interface: project state, tasks,
-approvals, budgets, reports, experiments, and artifacts are ordinary files.
+`a-exp-v2` coordinates durable studies rather than pre-sized work units. The
+repository holds goals, evidence, decisions, experiment history, and lifecycle
+state. A machine-local Codex thread ID can improve continuity but is never the
+source of truth.
 
-`a-exp-v2` does not implement a daemon and does not own cadence. An external
-scheduler decides when to call the command. `a-exp-v2` decides whether runnable
-work exists in the current repo and, when asked, executes one project work lane.
+## Units
 
-## Concepts
+- A **study** is `projects/<study>/` with `README.md`, `GOAL.md`, and
+  `STATE.yaml`.
+- A **session** is one bounded `codex exec` turn selected by `run-once`. It may
+  implement code and run multiple coherent foreground experiments.
+- An **experiment** is durable study evidence under `experiments/`.
+- A **thread record** is ignored machine-local resumption metadata. Losing it
+  causes a replacement thread, not loss of the study.
 
-- A `task` is the durable repo-level unit of work. `TASKS.md` is the visible
-  project queue; spec-backed tasks preserve full execution intent under
-  `projects/<project>/tasks/` or `projects/<project>/goals/`.
-- A `project work lane` is a project-level queue of tasks.
-- An enabled lane is eligible for `run-once`.
-- A disabled lane remains visible in status but is excluded from selection.
-- A `job` is the scheduler-facing JSON term for a project work lane.
-- `conventional` and `goal` are execution modes. For spec-backed tasks the mode
-  is a hard directive stored in the task or goal spec; legacy TASKS-only items
-  remain agent-triaged for backward compatibility.
-- A `protocol` is a reusable playbook and requirements pack for a recurring
-  experiment type, stored under `protocols/` and referenced by experiment
-  records when applicable.
+## Lifecycle
 
-## Boundary
+Persisted states are `shaping`, `ready`, `needs_human`, `paused`, `blocked`,
+`failed`, and `completed`. `running` is derived from a live marker. Disabled,
+ineligible, and invalid are effective scheduling states.
 
-The external scheduler owns:
+Interactive work can shape and steer any study by editing repository files.
+Committing `state: ready` hands it to the scheduler. `run-once` atomically
+selects a ready study, verifies a clean checkout, starts or resumes Codex,
+validates declared changes and structured closeout, commits the session record
+and state transition, and returns.
 
-- when to call `a-exp-v2 status --json`;
-- when to call `a-exp-v2 run-once`;
-- retries or alerting around command exit codes.
+## Safety Boundaries
 
-`a-exp-v2` owns:
+- Default sandbox: `workspace-write`; default approval policy: `never`.
+- `danger-full-access` is permitted only as an explicit per-study override.
+- Experiments remain foreground processes in this revision.
+- Claims are protected by a workspace lock and active markers.
+- A dirty or ambiguous recovery state degrades health and stops scheduling.
+- Closeout stages only declared paths plus runner-owned `STATE.yaml` and session
+  record files.
 
-- workspace initialization;
-- durable project lane configuration;
-- runnable task discovery;
-- deterministic lane ordering;
-- one-run-at-a-time locking;
-- run records;
-- full and brief live-streamed run logs;
-- closeout validation;
-- deterministic kanban summaries.
-
-The workflow skill owns:
-
-- orienting on project memory;
-- following hard execution mode for spec-backed tasks, or triaging legacy tasks
-  as conventional vs goal-mode vs approval vs defer;
-- executing the selected task;
-- closing out into durable repo memory.
-
-## Repo Layout
+## Layout
 
 ```text
-.a-exp/
-  config.yaml
-  kit.lock.yaml
-  logs/
-  running/
-  runs/
-
-.agents/
-  skills/
-
-docs/
+.a-exp/config.yaml
+.a-exp/{runs,logs,running,threads,output,recovery}/   # ignored runtime
+projects/<study>/
+  README.md
+  GOAL.md
+  STATE.yaml
+  PLAN.md                 # optional
+  DECISIONS.md            # optional
+  STEERING.md             # optional
+  experiments/            # optional
+  sessions/               # committed closeouts
 protocols/
-  registry.yaml
-  <domain>/
-    <protocol>/
-      <version>/
-        PLAYBOOK.md
-        protocol.yaml
-        EXPERIMENT.template.md
-        checklist.md
-projects/
-  <project>/
-    README.md
-    TASKS.md
-    tasks/
-      <task-id>.md
-    goals/
-      <goal-id>.md
-    budget.yaml
-    ledger.yaml
-    experiments/
-      <experiment-id>/
-        EXPERIMENT.md
-        progress.json
-modules/
-  registry.yaml
-  <module>/
-    artifacts/
 reports/
 APPROVAL_QUEUE.md
 ```
-
-`projects/**`, `reports/**`, `APPROVAL_QUEUE.md`, and budget/experiment records
-are durable memory. `.a-exp/runs/*.json`, `.a-exp/logs/**`, and
-`.a-exp/running/**` are runtime provenance.

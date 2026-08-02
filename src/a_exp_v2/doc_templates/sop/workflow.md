@@ -1,61 +1,24 @@
-# Workflow SOP
+# Autonomous Study Workflow
 
-The agent workflow for one selected task is:
+One scheduler invocation performs one study session:
 
 ```text
-orient -> triage -> execute -> closeout or handoff
+claim -> orient -> advance -> verify -> structured closeout -> commit state
 ```
 
-## Orient
+The agent reads repository guidance, `README.md`, `GOAL.md`, `STATE.yaml`, and
+any steering, plan, decisions, protocols, prior sessions, and experiments. It
+advances the study within the stated autonomy envelope, potentially through
+multiple foreground experiments and coherent code changes. It commits after
+each material experiment or code checkpoint.
 
-Read the project README, `TASKS.md`, relevant plans, experiment records,
-reports, artifacts, budget files, and approval queue entries.
+`STATE.yaml` is scheduler-owned during the autonomous turn. The final response
+must declare all changed paths and request one next state: `ready`,
+`needs_human`, `paused`, `blocked`, or `completed`. The runner validates the
+response and worktree, writes `sessions/<run-id>.yaml`, updates `STATE.yaml`,
+and makes the final scoped closeout commit.
 
-For experiment-heavy tasks, also check `protocols/registry.yaml`. If a matching
-protocol exists, read its playbook, `protocol.yaml`, experiment template, and
-checklist before triage or execution.
-
-## Triage
-
-For spec-backed tasks, follow the selected `execution_mode` exactly. For legacy
-TASKS-only entries, classify the selected task as one of:
-
-- `conventional`
-- `goal-mode`
-- `approval`
-- `defer`
-
-Record the decision in durable project memory when it materially affects the
-work.
-
-If a protocol applies, record the selected protocol id and version in the
-experiment record or closeout. If no protocol exists but the task reveals a
-recurring experiment pattern, propose a follow-up task to extract one.
-
-## Execute
-
-Run conventional work directly. For goal-mode work, create or resume child task
-specs as needed and close out each meaningful checkpoint before continuing the
-parent goal.
-
-## Closeout
-
-Every executed task must end with durable closeout. At minimum record:
-
-- task;
-- execution mode;
-- mode policy, when present;
-- protocol id and version, if applicable;
-- status;
-- summary;
-- verification command and result;
-- changed files or artifacts;
-- follow-up tasks or open questions.
-
-Follow-up tasks must return to `TASKS.md`; do not automatically chain into them
-unless the human explicitly requested continued work.
-
-## Handoff
-
-If blocked, interrupted, or deferred, write the current state, blocker, and next
-action to durable repo memory.
+Infrastructure failure is retried once after backoff if the worktree is safe.
+A second consecutive failure moves the study to `failed`. Dirty or ambiguous
+failure preserves files, writes ignored recovery information, degrades health,
+and requires human recovery.

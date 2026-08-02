@@ -1,51 +1,21 @@
 ---
 name: packet
-description: Create implementation handoff packets from a-exp-v2 projects.
+description: Create implementation handoff packets from a-exp-v2 studies.
 ---
 
 # Packet
 
-Use this skill to transfer a prototype, experiment, or project result into an
-external package.
+Use this skill to transfer a separately scoped implementation from study memory
+to an `a-dev` workflow or external package.
 
-Invocation concept:
+Read the target package instructions and relevant study `README.md`, `GOAL.md`,
+plans, decisions, sessions, experiments, protocols, reports, modules, and
+artifact manifests. Write an implementation-ready Markdown packet under
+`reports/packet/`.
 
-```text
-packet <project> <target-package-path> [additional instructions]
-```
+Include purpose, computational contract, evidence and verified behavior,
+prototype/artifact paths, target integration points, dependencies, edge cases,
+test plan, example usage, and risks. A packet is an explicit boundary for work
+whose scope should be owned elsewhere; it is not an internal scheduler unit.
 
-Read target package instructions first, then read a-exp project memory:
-
-- `projects/<project>/README.md`
-- `projects/<project>/TASKS.md`
-- `projects/<project>/plans/**`
-- `projects/<project>/experiments/**/EXPERIMENT.md`
-- referenced protocol packs under `protocols/**`
-- `projects/<project>/reports/**`
-- `reports/**` when relevant
-- `modules/<project>/**` and artifact manifests when relevant
-
-Write an implementation-ready Markdown packet under `reports/packet/`.
-
-The packet should identify:
-
-- purpose;
-- mathematical/computational contract;
-- protocol id/version and protocol-derived requirements when the transfer
-  depends on a protocol-backed experiment;
-- prototype location;
-- verified behavior;
-- target package integration points;
-- dependencies;
-- edge cases;
-- test plan;
-- example usage;
-- implementation risks.
-
-Do not use `packet` for internal goal-mode execution. The workflow skill decides
-whether to use goal mode.
-
-## Git Closeout
-
-After writing repo changes, run `git status --short`, commit the intended
-changes, and leave the workspace clean except for intentionally ignored files.
+Commit the packet and leave the checkout clean.

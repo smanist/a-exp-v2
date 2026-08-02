@@ -1,65 +1,33 @@
 # Experiment Schema
 
-Experiment record:
+Experiment records live at:
 
 ```text
-projects/<project>/experiments/<experiment-id>/EXPERIMENT.md
+projects/<study>/experiments/<experiment-id>/EXPERIMENT.md
 ```
-
-Minimal shape:
 
 ```markdown
 ---
 id: example-v1
 status: planned
-date: 2026-05-31
-project: my-project
+date: 2026-08-01
+study: my-study
 protocol: optional.protocol-id.v1
 ---
 
 # example-v1
 
 ## Question
-
-What will this experiment answer?
-
 ## Design
-
-Inputs, method, expected outputs, and resource assumptions.
-
+## Execution
 ## Results
-
-Filled after completion.
-
 ## Findings
-
-Findings with provenance.
-
+## Verification
 ## Reproducibility
-
-Commands, configs, and artifact paths.
 ```
 
-Omit `protocol` when no reusable protocol applies. When present, the value
-should match an entry in `protocols/registry.yaml`.
-
-Detached or long-running experiments may also write:
-
-```text
-projects/<project>/experiments/<experiment-id>/progress.json
-```
-
-Minimal `progress.json` fields:
-
-```json
-{
-  "status": "running",
-  "started_at": "2026-05-31T12:00:00Z",
-  "updated_at": "2026-05-31T12:05:00Z",
-  "command": ["python", "experiment.py"],
-  "log_file": "modules/my-module/artifacts/example-v1/output.log",
-  "artifacts_dir": "modules/my-module/artifacts/example-v1"
-}
-```
-
-Active statuses are `running`, `retrying`, and `stopping`.
+Record commands, configuration, code revision, environment, metrics, artifact
+paths, findings, caveats, and applicable protocol. A session may update
+`progress.json` while a foreground experiment runs; active values are
+`running`, `retrying`, and `stopping`. No process represented there may outlive
+the owning Codex turn in this revision.

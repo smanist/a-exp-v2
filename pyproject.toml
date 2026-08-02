@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a-exp-v2"
-version = "0.1.0"
+version = "0.2.0"
 description = "Repo-local operating layer for recurring Codex-assisted work"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,7 @@ a_exp_v2 = [
   "protocol_templates/**/*.py",
   "protocol_templates/**/*.yaml",
   "skill_templates/**/*.md",
+  "schemas/*.json",
 ]
 
 [tool.pytest.ini_options]

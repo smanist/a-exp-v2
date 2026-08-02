@@ -1,35 +1,10 @@
-# Kanban Output
-
-Command:
+# Study Summary Output
 
 ```bash
-a-exp-v2 kanban [project]
+a-exp kanban [study]
 ```
 
-Output:
-
-```text
-reports/kanban/<project>.md
-```
-
-Existing files are overwritten.
-
-The generator reads:
-
-- `projects/<project>/TASKS.md`;
-- `.a-exp/runs/*.json`;
-- `projects/<project>/experiments/*/EXPERIMENT.md`;
-- `projects/<project>/reports/**/*.md`;
-- relevant workspace reports under `reports/`.
-
-Output follows the old a-exp convention:
-
-```markdown
-## <project>-Tasks
-- [x] **Progress**: <br>- <total> in total, <done> done
-- [x] **Runs**: <br>- <task>: <status>, <ended_at>, <log_file>
-
-## <project>-Results
-- [x] **Experiment** <id>: <br>- <finding>
-- [x] **Report** <id>: <br>- <finding>
-```
+The command deterministically writes `reports/kanban/<study>.md` and commits
+only the generated files. Each summary shows configured/effective lifecycle,
+scheduling and eligibility, current direction, open questions, recent committed
+sessions, experiment findings, and declared artifacts.

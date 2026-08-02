@@ -9,7 +9,7 @@ Use this skill to create durable human-facing summaries.
 
 Report types:
 
-- project status;
+- study status;
 - research digest;
 - experiment comparison;
 - operational summary;
@@ -17,7 +17,7 @@ Report types:
 
 Read:
 
-- project README and tasks;
+- study README, goal, state, steering, plans, decisions, and sessions;
 - experiment records and progress;
 - referenced protocols and protocol checklists;
 - `.a-exp/runs/*.json`;
@@ -31,9 +31,8 @@ When summarizing experiments, include protocol id/version when present and
 separate protocol-backed findings from exploratory or protocol-incomplete
 findings.
 
-Reports should not change project state unless explicitly requested. If a report
-discovers follow-up work, add tasks only when asked or when the workflow task
-requires closeout into project memory.
+Reports should not change study state unless explicitly requested. Record newly
+discovered directions or questions in study memory when requested.
 
 ## Git Closeout
 

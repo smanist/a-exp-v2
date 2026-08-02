@@ -42,7 +42,10 @@ def init(
     path: Path = typer.Argument(Path("."), help="Workspace path to initialize."),
 ) -> None:
     """Initialize an a-exp-v2 workspace."""
-    created = init_workspace(path.resolve())
+    try:
+        created = init_workspace(path.resolve())
+    except AExpError as exc:
+        exit_with_error(exc)
     for item in created:
         typer.echo(item)
 
@@ -51,12 +54,12 @@ def init(
 def status(
     json_output: bool = typer.Option(False, "--json", help="Print scheduler-readable JSON."),
 ) -> None:
-    """Show repo runnable-work status."""
+    """Show study lifecycle and runnable-session status."""
     try:
         root = find_workspace()
+        data = status_json(root)
     except AExpError as exc:
         exit_with_error(exc)
-    data = status_json(root)
     if json_output:
         typer.echo(json.dumps(data, indent=2))
     else:
@@ -65,7 +68,7 @@ def status(
 
 @app.command("run-once")
 def run_once_command() -> None:
-    """Run one runnable project work lane."""
+    """Run or resume one ready study session."""
     try:
         root = find_workspace()
         record = run_once(root)
@@ -83,7 +86,7 @@ def run_once_command() -> None:
 
 @app.command()
 def enable(project: str) -> None:
-    """Enable a project work lane."""
+    """Enable a study for scheduling."""
     try:
         root = find_workspace()
         set_project_enabled(root, project, True)
@@ -94,7 +97,7 @@ def enable(project: str) -> None:
 
 @app.command()
 def disable(project: str) -> None:
-    """Disable a project work lane."""
+    """Disable a study for scheduling."""
     try:
         root = find_workspace()
         set_project_enabled(root, project, False)
@@ -117,7 +120,8 @@ def kanban(
         output_dir = root / output_dir
     try:
         paths = generate_kanban(root, project=project, output_dir=output_dir)
-        commit_workspace_changes(root, "Generate a-exp-v2 kanban")
+        relative_paths = [path.relative_to(root) for path in paths if path.is_relative_to(root)]
+        commit_workspace_changes(root, "Generate a-exp-v2 kanban", relative_paths)
     except FileNotFoundError as exc:
         exit_with_error(WorkspaceError(str(exc)))
     except AExpError as exc:

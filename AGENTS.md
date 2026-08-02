@@ -1,86 +1,52 @@
 # AGENTS.md
 
 This repository implements `a-exp-v2`, a repo-local operating layer for
-recurring Codex-assisted work. Use this file for fast orientation before reading
-deeper docs.
+durable Codex-assisted studies and bounded autonomous sessions.
 
 ## Source Map
 
-- `src/a_exp_v2/cli.py`: Typer command surface for `init`, `status`,
-  `run-once`, `enable`, `disable`, and `kanban`.
-- `src/a_exp_v2/core.py`: workspace initialization, project lane discovery,
-  runnable-task selection, run records, lock markers, closeout validation, and
-  agent launch.
-- `src/a_exp_v2/config.py`: `.a-exp/config.yaml` dataclasses and YAML
-  load/dump behavior.
-- `src/a_exp_v2/kanban.py`: deterministic Markdown kanban generation from
-  project memory, reports, and run records.
-- `src/a_exp_v2/validators.py`: schema-style checks for status JSON and run
-  records.
-- `src/a_exp_v2/doc_templates/`: docs copied into initialized workspaces.
-- `src/a_exp_v2/protocol_templates/`: reusable protocol packs copied into
-  initialized workspaces under `protocols/`.
-- `src/a_exp_v2/skill_templates/`: repo-local skills copied into initialized
-  workspaces under `.agents/skills/`.
-- `docs/`: human-facing design, SOP, schema, and convention references for
-  this package.
-- `tests/`: CLI and core behavior tests.
+- `src/a_exp_v2/cli.py`: `init`, `status`, `run-once`, `enable`, `disable`, and
+  `kanban`.
+- `src/a_exp_v2/core.py`: study discovery, state validation, atomic claims,
+  run closeout, Git safety, and status.
+- `src/a_exp_v2/runner.py`: Codex JSONL execution, resumption, timeout, signal
+  forwarding, and log parsing.
+- `src/a_exp_v2/config.py`: layout-version-2 configuration.
+- `src/a_exp_v2/kanban.py`: lifecycle-oriented Markdown summaries.
+- `src/a_exp_v2/validators.py`: status and run-record contract checks.
+- `src/a_exp_v2/schemas/`: structured Codex final-response schemas.
+- `src/a_exp_v2/doc_templates/`, `protocol_templates/`, and
+  `skill_templates/`: material copied into initialized workspaces.
+- `tests/`: package and CLI behavior.
 
 ## Generated Workspace Map
 
-`a-exp-v2 init` creates the files future agents usually need:
+`a-exp-v2 init` creates infrastructure but no study. The `project` skill creates
+`projects/<study>/README.md`, `GOAL.md`, and `STATE.yaml` in `shaping` state.
+Optional study memory includes `PLAN.md`, `DECISIONS.md`, `STEERING.md`,
+`experiments/`, and `sessions/`.
 
-- `AGENTS.md`: first-read orientation for the initialized workspace.
-- `.a-exp/config.yaml`: lane defaults and per-project enablement, priority,
-  model, and timeout.
-- `.a-exp/runs/*.json`: completed or failed run records.
-- `.a-exp/logs/`: live-streamed `codex exec` stdout/stderr for each run.
-- `.a-exp/running/*.json`: active-run markers used to keep one run active at a
-  time.
-- `.agents/skills/`: workflow, project, review, report, packet, diagnose, and
-  parameter-tuning skills.
-- `protocols/`: reusable playbooks and protocol packs for recurring experiment
-  types.
-- `projects/<project>/README.md`: durable project context, decisions, closeout
-  notes, and artifact references.
-- `projects/<project>/TASKS.md`: the visible project work lane. Unchecked
-  tasks are open; `[blocked-by: ...]` and `[approval-needed: ...]` keep tasks
-  from being runnable. New runnable work should point at a task or goal spec.
-- `projects/<project>/tasks/<id>.md`: canonical conventional task specs with
-  hard execution mode and recorded original prompt.
-- `projects/<project>/goals/<id>.md`: canonical goal-mode specs. Goal runs may
-  create child task specs, but each meaningful child task needs fixed closeout.
-- `projects/<project>/plans/`: optional plans for larger work.
-- `projects/<project>/experiments/<id>/EXPERIMENT.md`: experiment design,
-  results, and findings.
-- `projects/<project>/experiments/<id>/progress.json`: active experiment state;
-  `running`, `retrying`, and `stopping` count as running.
-- `projects/<project>/budget.yaml` and `ledger.yaml`: optional budget and spend
-  memory.
-- `modules/registry.yaml`: optional registry for reusable modules and artifacts.
-- `reports/`: cross-project reports, packets, research, and generated kanban
-  summaries.
-- `APPROVAL_QUEUE.md`: durable human approval queue.
+Machine-local runtime state lives under ignored `.a-exp/` directories. The
+repository is authoritative: committed study files determine what future
+interactive or autonomous Codex sessions know.
 
 ## Work Cycle
 
-For scheduler-triggered work, use the `workflow` skill. Read `AGENTS.md`, then
-the selected project `README.md` and `TASKS.md`. Execute only the selected task,
-then close out into durable memory under `projects/<project>/`, `reports/`, or
-`APPROVAL_QUEUE.md`.
+Interactive sessions shape or steer a study by editing and committing its
+files. Setting committed `STATE.yaml` to `ready` makes it schedulable.
 
-For experiment-heavy work, check `protocols/registry.yaml` for an applicable
-protocol. If one applies, read its playbook, template, and checklist before
-planning or executing the experiment, then record the protocol id in the
-experiment record and closeout.
+For scheduler-triggered work, use the `workflow` skill. One `run-once` selects
+one ready, eligible study and runs or resumes one bounded Codex turn. The turn
+may implement code and run multiple foreground experiments. It must not edit
+`STATE.yaml`; the runner validates structured closeout and owns the state
+transition and session record.
 
-For project creation, create only the files the project currently needs. The
-minimum useful project is `projects/<project>/README.md` plus
-`projects/<project>/TASKS.md`; add spec files, plans, experiments, budgets,
-ledgers, and reports when the task actually needs them.
+For experiment-heavy work, consult `protocols/registry.yaml` and any applicable
+playbook, template, and checklist.
 
 ## Git Rule
 
-After any repo change made by a skill, CLI command, or manual workflow, commit
-the resulting changes. Use `git status --short` to confirm the workspace is
-clean except for intentionally ignored files.
+Commit every material experiment or coherent code change. Successful runs and
+interactive shaping must leave the checkout clean except for ignored runtime
+files. Never stage the whole workspace during autonomous closeout; stage only
+declared changes and runner-owned state/session files.

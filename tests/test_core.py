@@ -1,806 +1,589 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 from a_exp_v2 import core
-from a_exp_v2.config import load_config
+from a_exp_v2.config import ProjectConfig, dump_config, load_config
 from a_exp_v2.kanban import generate as generate_kanban
+from a_exp_v2.runner import CodexRunResult
+from a_exp_v2.validators import validate_run_record, validate_status_json
 
 
-def write_project(root: Path, name: str, tasks: str) -> None:
-    project = root / "projects" / name
-    project.mkdir(parents=True, exist_ok=True)
-    (project / "README.md").write_text(f"# {name}\n\n## Log\n", encoding="utf-8")
-    (project / "TASKS.md").write_text(tasks, encoding="utf-8")
+def git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=core.git_commit_env(),
+    )
+    return result.stdout.strip()
 
 
-def test_init_does_not_create_self_project(tmp_path: Path) -> None:
+def commit_all(root: Path, message: str = "Shape study") -> None:
+    git(root, "add", "--all")
+    git(root, "commit", "-m", message)
+
+
+def write_study(
+    root: Path,
+    name: str,
+    *,
+    state: str = "ready",
+    ready_after: str | None = None,
+    requires: list[str] | None = None,
+    failures: int = 0,
+    commit: bool = True,
+) -> Path:
+    path = root / "projects" / name
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "README.md").write_text(f"# {name}\n\nEnvironment orientation.\n", encoding="utf-8")
+    (path / "GOAL.md").write_text(
+        "# Goal\n\n## Objective\nAdvance evidence.\n\n"
+        "## Evidence Criteria\nVerified output.\n\n"
+        "## Autonomy Envelope\nRun local experiments.\n\n"
+        "## Stop Conditions\nStop when supported.\n",
+        encoding="utf-8",
+    )
+    core.write_study_state(
+        path / "STATE.yaml",
+        core.StudyState(
+            state=state,
+            ready_after=ready_after,
+            summary=f"{name} summary",
+            next_direction="Continue",
+            open_questions=[],
+            requires=requires or [],
+            last_run_id=None,
+            consecutive_failures=failures,
+        ),
+    )
+    if commit:
+        commit_all(root, f"Shape {name}")
+    return path
+
+
+def successful_closeout(
+    *,
+    next_state: str = "ready",
+    files: list[str] | None = None,
+    experiments: list[str] | None = None,
+) -> dict[str, Any]:
+    outcome = {
+        "ready": "progress",
+        "needs_human": "needs_human",
+        "paused": "paused",
+        "blocked": "blocked",
+        "completed": "completed",
+    }[next_state]
+    return {
+        "outcome": outcome,
+        "next_state": next_state,
+        "summary": "Made measurable progress",
+        "experiments": experiments or ["exp-a", "exp-b"],
+        "verification": [{"command": "pytest -q", "result": "passed"}],
+        "files_changed": files or [],
+        "artifacts": ["projects/demo/artifacts/result.json"],
+        "next_direction": "Run the next comparison" if next_state == "ready" else None,
+        "open_questions": ["Choose a threshold"] if next_state == "needs_human" else [],
+        "budget_used": {"wall_seconds": 12, "experiments": 2},
+    }
+
+
+def result(
+    closeout: dict[str, Any] | None,
+    *,
+    returncode: int = 0,
+    thread_id: str | None = "thread-1",
+    turn_started: bool = True,
+) -> CodexRunResult:
+    return CodexRunResult(
+        command=["codex"],
+        returncode=returncode,
+        stdout="",
+        stderr="",
+        thread_id=thread_id,
+        turn_started=turn_started,
+        duration_seconds=12,
+        closeout=closeout,
+        closeout_error=None if closeout is not None else "missing final response",
+    )
+
+
+def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     created = core.init_workspace(tmp_path)
 
     assert tmp_path / ".git" in created
-    assert (tmp_path / ".git").exists()
-    assert tmp_path / ".a-exp" / "config.yaml" in created
-    assert tmp_path / ".gitignore" in created
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == core.default_gitignore_text()
     assert (tmp_path / "projects").is_dir()
-    assert not (tmp_path / "projects" / "a-exp").exists()
-    assert (tmp_path / "APPROVAL_QUEUE.md").exists()
-    agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
-    assert "## Fast Orientation" in agents_text
-    assert "`projects/<project>/TASKS.md`: the visible project work lane" in agents_text
-    assert "`projects/<project>/goals/<id>.md`: canonical goal-mode specs" in agents_text
-    assert "## Git Rule" in agents_text
+    assert list((tmp_path / "projects").iterdir()) == []
+    assert (tmp_path / "docs" / "schemas" / "study.md").exists()
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
-    assert (tmp_path / ".agents" / "skills" / "parameter-tuning" / "SKILL.md").exists()
-    assert "## Git Closeout" in (
-        tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    assert (tmp_path / "docs" / "schemas" / "status-json.md").exists()
-    assert (tmp_path / "docs" / "schemas" / "protocol.md").exists()
-    assert (tmp_path / "protocols" / "registry.yaml").exists()
-    assert (
-        tmp_path
-        / "protocols"
-        / "numerics"
-        / "convergence-study"
-        / "v1"
-        / "PLAYBOOK.md"
-    ).exists()
-    assert "method and problem agnostic" in (
-        tmp_path
-        / "protocols"
-        / "numerics"
-        / "convergence-study"
-        / "v1"
-        / "PLAYBOOK.md"
-    ).read_text(encoding="utf-8")
-    assert (
-        tmp_path
-        / "protocols"
-        / "numerics"
-        / "convergence-study"
-        / "v1"
-        / "helpers"
-        / "tuning_plan.py"
-    ).exists()
-    assert (
-        tmp_path
-        / "protocols"
-        / "numerics"
-        / "convergence-study"
-        / "v1"
-        / "helpers"
-        / "aggregate_trials.py"
-    ).exists()
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == "Initialize a-exp-v2 workspace"
-    )
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "status", "--short"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == ""
-    )
-    artifact_dir = tmp_path / "modules" / "demo" / "artifacts" / "example"
-    artifact_dir.mkdir(parents=True)
-    for name in ["archive.zip", "array.npz", "table.parquet"]:
-        (artifact_dir / name).write_text("data\n", encoding="utf-8")
-    assert (
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(tmp_path),
-                "check-ignore",
-                "modules/demo/artifacts/example/archive.zip",
-                "modules/demo/artifacts/example/array.npz",
-                "modules/demo/artifacts/example/table.parquet",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-        == [
-            "modules/demo/artifacts/example/archive.zip",
-            "modules/demo/artifacts/example/array.npz",
-            "modules/demo/artifacts/example/table.parquet",
-        ]
-    )
+    assert "STATE.yaml" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert git(tmp_path, "log", "-1", "--format=%s") == "Initialize a-exp-v2 workspace"
+    assert git(tmp_path, "status", "--short") == ""
 
 
-def test_init_creates_workspace_git_root_inside_parent_repo(tmp_path: Path) -> None:
-    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True, text=True)
+def test_init_creates_nested_git_root(tmp_path: Path) -> None:
+    git(tmp_path, "init")
     workspace = tmp_path / "workspace"
-
-    created = core.init_workspace(workspace)
-
-    assert workspace / ".git" in created
-    assert (workspace / ".git").exists()
-    assert (workspace / ".a-exp" / "config.yaml").exists()
-    assert (
-        subprocess.run(
-            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == str(workspace)
-    )
+    core.init_workspace(workspace)
+    assert Path(git(workspace, "rev-parse", "--show-toplevel")) == workspace
 
 
-def test_relative_symlink_target_uses_relative_path_without_username(tmp_path: Path) -> None:
-    source = tmp_path / "a-exp-v2" / "src" / "a_exp_v2" / "doc_templates"
-    dest_parent = tmp_path / "workspace"
-    source.mkdir(parents=True)
-    dest_parent.mkdir()
-
-    target = core.relative_symlink_target(dest_parent, source)
-
-    assert target == "../a-exp-v2/src/a_exp_v2/doc_templates"
-    assert Path.home().name not in Path(target).parts
-
-
-def test_relative_symlink_target_rejects_home_username(tmp_path: Path) -> None:
-    source = Path.home() / "a-exp-v2" / "src" / "a_exp_v2" / "doc_templates"
-
-    target = core.relative_symlink_target(tmp_path, source)
-
-    assert target is None
-
-
-def test_status_uses_runnable_work_not_due_time(tmp_path: Path) -> None:
+def test_state_validation_and_invalid_discovery(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "\n".join(
-            [
-                "# demo",
-                "",
-                "- [ ] Ready task",
-                "  Why: test",
-                "  Done when: done",
-                "- [ ] Blocked task [blocked-by: data]",
-                "- [ ] Approval task [approval-needed: budget]",
-                "- [x] Done task",
-            ]
-        ),
-    )
+    path = write_study(tmp_path, "bad", commit=False)
+    (path / "STATE.yaml").write_text("schema_version: 1\nstate: running\n", encoding="utf-8")
+    commit_all(tmp_path)
+
+    studies, issues = core.discover_studies(tmp_path)
+    assert studies[0].effective_state == "invalid"
+    assert any("STATE.yaml" in issue for issue in issues)
+    data = core.status_json(tmp_path)
+    assert data["health"] == "degraded"
+    assert data["studies"]["invalid"] == 1
+
+
+def test_status_contract_and_lifecycle_counts(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "ready")
+    write_study(tmp_path, "human", state="needs_human")
+    write_study(tmp_path, "shape", state="shaping")
 
     data = core.status_json(tmp_path)
-
+    assert validate_status_json(data) == []
     assert data["health"] == "ok"
-    assert data["jobs"]["runnable"] == 1
-    item = data["jobs"]["items"][0]
-    assert item["project"] == "demo"
-    assert item["state"] == "runnable"
-    assert item["open_tasks"] == 3
-    assert item["blocked_tasks"] == 2
-    assert item["runnable_tasks"] == 1
-    assert "due" not in item
-    assert "next_run_at" not in item
+    assert data["work"]["runnable"] == 1
+    assert data["studies"]["ready"] == 1
+    assert data["studies"]["needs_human"] == 1
+    assert next(item for item in data["studies"]["items"] if item["id"] == "shape")[
+        "state"
+    ] == "shaping"
+    item = next(item for item in data["studies"]["items"] if item["id"] == "ready")
+    assert item["configured_state"] == "ready"
+    assert item["eligible"] is True
+    assert item["run_count"] == 0
 
 
-def test_parse_tasks_preserves_legacy_tasks_and_reads_spec_metadata(tmp_path: Path) -> None:
-    tasks_path = tmp_path / "TASKS.md"
-    tasks_path.write_text(
-        "\n".join(
-            [
-                "# Tasks",
-                "",
-                "- [ ] Legacy task",
-                "  Why: old shape",
-                "- [ ] Spec backed task",
-                "  Spec: `projects/demo/tasks/spec-backed.md`",
-                "  Execution mode: goal",
-                "  Mode policy: hard",
-                "  Priority: high",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    legacy, spec_backed = core.parse_tasks(tasks_path)
-
-    assert legacy.title == "Legacy task"
-    assert legacy.spec_path is None
-    assert legacy.execution_mode is None
-    assert spec_backed.title == "Spec backed task"
-    assert spec_backed.spec_path == "projects/demo/tasks/spec-backed.md"
-    assert spec_backed.execution_mode == "goal"
-    assert spec_backed.mode_policy == "hard"
-
-
-def test_parse_tasks_blocks_invalid_execution_mode(tmp_path: Path) -> None:
-    tasks_path = tmp_path / "TASKS.md"
-    tasks_path.write_text("- [ ] Bad mode\n  Execution mode: improvise\n", encoding="utf-8")
-
-    task = core.parse_tasks(tasks_path)[0]
-
-    assert task.blocked is True
-    assert task.parse_error == "invalid execution mode: improvise"
-
-
-def test_resolve_task_execution_spec_validates_frontmatter(tmp_path: Path) -> None:
+def test_dirty_idle_workspace_degrades_health_and_blocks_claim(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "\n".join(
-            [
-                "- [ ] Run spec task",
-                "  Spec: `projects/demo/tasks/run-spec-task.md`",
-                "  Execution mode: conventional",
-                "  Mode policy: hard",
-            ]
-        ),
-    )
-    spec_path = tmp_path / "projects" / "demo" / "tasks" / "run-spec-task.md"
-    spec_path.parent.mkdir(parents=True)
-    spec_path.write_text(
-        "\n".join(
-            [
-                "---",
-                "execution_mode: conventional",
-                "mode_policy: hard",
-                "source: project-augment",
-                "original_prompt_sha256: abc123",
-                "---",
-                "# Run spec task",
-                "",
-                "## Original user prompt",
-                "```text",
-                "do the work",
-                "```",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    write_study(tmp_path, "demo")
+    (tmp_path / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")
 
-    task = core.discover_lanes(tmp_path)[0].tasks[0]
-    resolved = core.resolve_task_execution_spec(tmp_path, "demo", task)
-
-    assert resolved.execution_mode == "conventional"
-    assert resolved.mode_policy == "hard"
-    assert resolved.spec_path == "projects/demo/tasks/run-spec-task.md"
-    assert resolved.source == "project-augment"
-    assert resolved.original_prompt_sha256 == "abc123"
+    assert core.status_json(tmp_path)["health"] == "degraded"
+    with pytest.raises(core.WorkspaceError, match="uncommitted changes"):
+        core.run_once(tmp_path)
 
 
-def test_resolve_task_execution_spec_rejects_invalid_spec_mode(tmp_path: Path) -> None:
+def test_scoped_commit_refuses_unrelated_staged_paths(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "- [ ] Run bad spec\n  Spec: `projects/demo/tasks/bad.md`\n",
-    )
-    spec_path = tmp_path / "projects" / "demo" / "tasks" / "bad.md"
-    spec_path.parent.mkdir(parents=True)
-    spec_path.write_text(
-        "---\nexecution_mode: freestyle\nmode_policy: hard\nsource: direct\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\nbad\n```\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "unrelated.txt").write_text("user work\n", encoding="utf-8")
+    git(tmp_path, "add", "unrelated.txt")
+    report = tmp_path / "reports" / "kanban" / "summary.md"
+    report.write_text("generated\n", encoding="utf-8")
 
-    task = core.discover_lanes(tmp_path)[0].tasks[0]
+    with pytest.raises(core.WorkspaceError, match="unrelated staged"):
+        core.commit_workspace_changes(
+            tmp_path,
+            "Generate summary",
+            ["reports/kanban/summary.md"],
+        )
 
-    with pytest.raises(core.WorkspaceError, match="invalid execution_mode"):
-        core.resolve_task_execution_spec(tmp_path, "demo", task)
+    assert core.git_staged_paths(tmp_path) == ["unrelated.txt"]
+    assert "reports/kanban/summary.md" in core.git_status_paths(tmp_path)
 
 
-def test_enable_disable_requires_existing_project(tmp_path: Path) -> None:
+def test_enable_disable_requires_valid_study_and_commits(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [ ] Ready\n")
+    write_study(tmp_path, "demo")
 
     core.set_project_enabled(tmp_path, "demo", False)
-    assert core.status_json(tmp_path)["jobs"]["items"][0]["state"] == "disabled"
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == "Disable a-exp-v2 project demo"
-    )
-
+    assert core.status_json(tmp_path)["studies"]["items"][0]["state"] == "disabled"
+    assert git(tmp_path, "log", "-1", "--format=%s") == "Disable a-exp-v2 study demo"
     core.set_project_enabled(tmp_path, "demo", True)
-    assert core.status_json(tmp_path)["jobs"]["items"][0]["state"] == "runnable"
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == "Enable a-exp-v2 project demo"
-    )
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "status", "--short"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == ""
-    )
-
-    with pytest.raises(core.WorkspaceError, match="Project has no TASKS.md"):
+    assert core.status_json(tmp_path)["work"]["runnable"] == 1
+    with pytest.raises(core.WorkspaceError, match="not a valid study"):
         core.set_project_enabled(tmp_path, "missing", True)
 
+
+def test_capability_eligibility_and_host_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "gpu", requires=["cuda", "cpu"])
+    host = tmp_path / ".a-exp" / "host.yaml"
+    host.write_text("capabilities: []\n", encoding="utf-8")
+    monkeypatch.setenv("A_EXP_HOST_CONFIG", str(host))
+
+    data = core.status_json(tmp_path)
+    item = data["studies"]["items"][0]
+    assert data["health"] == "ok"
+    assert item["state"] == "ineligible"
+    assert "cuda" in item["ineligible_reason"]
+    assert data["work"]["runnable"] == 0
+
+    host.write_text("capabilities: [cuda]\n", encoding="utf-8")
+    assert core.status_json(tmp_path)["work"]["runnable"] == 1
+    assert "cpu" in core.load_host_capabilities()
+    assert {"linux", "macos"} & core.load_host_capabilities()
+
+
+def test_config_is_strict_and_danger_requires_project_override(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("layout_version: 2\ndefaults:\n  mystery: 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown"):
+        load_config(path)
+    path.write_text(
+        "layout_version: 2\ndefaults:\n  sandbox: danger-full-access\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="explicit project override"):
+        load_config(path)
+
+
+def test_selection_ready_after_priority_last_run_and_id(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "zeta")
+    write_study(tmp_path, "alpha")
     config = load_config(tmp_path / ".a-exp" / "config.yaml")
-    assert config.projects["demo"].enabled is True
+    config.projects["zeta"] = ProjectConfig(priority=10)
+    config.projects["alpha"] = ProjectConfig(priority=10)
+    dump_config(config, tmp_path / ".a-exp" / "config.yaml")
+    commit_all(tmp_path, "Configure priorities")
 
+    studies, _ = core.discover_studies(tmp_path)
+    assert core.select_study(studies).project == "alpha"
 
-def test_select_lane_uses_priority_then_project_name(tmp_path: Path) -> None:
-    core.init_workspace(tmp_path)
-    write_project(tmp_path, "zeta", "- [ ] Z task\n")
-    write_project(tmp_path, "alpha", "- [ ] A task\n")
+    session = tmp_path / "projects" / "alpha" / "sessions" / "old.yaml"
+    session.parent.mkdir(parents=True)
+    session.write_text("started_at: 2026-01-01T00:00:00Z\n", encoding="utf-8")
+    commit_all(tmp_path, "Record alpha history")
+    studies, _ = core.discover_studies(tmp_path)
+    assert core.select_study(studies).project == "zeta"
 
     config = load_config(tmp_path / ".a-exp" / "config.yaml")
-    config.projects["zeta"] = core.ProjectLaneConfig(enabled=True, priority=5)
-    config.projects["alpha"] = core.ProjectLaneConfig(enabled=True, priority=5)
-    core.dump_config(config, tmp_path / ".a-exp" / "config.yaml")
-
-    assert core.select_lane(tmp_path).project == "alpha"
-
-    config.projects["zeta"].priority = 1
-    core.dump_config(config, tmp_path / ".a-exp" / "config.yaml")
-    assert core.select_lane(tmp_path).project == "zeta"
+    config.projects["alpha"].priority = 1
+    dump_config(config, tmp_path / ".a-exp" / "config.yaml")
+    commit_all(tmp_path, "Prefer alpha")
+    studies, _ = core.discover_studies(tmp_path)
+    assert core.select_study(studies).project == "alpha"
 
 
-def test_run_once_records_success_when_project_memory_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_future_cooldown_is_not_runnable(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [ ] Ready\n")
-
-    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
-        readme = root / "projects" / lane.project / "README.md"
-        readme.write_text(
-            readme.read_text(encoding="utf-8")
-            + "\n## Task closeout\n\n"
-            + "Task: Ready\n"
-            + "Status: completed\n"
-            + "Verification:\n"
-            + "- Command: pytest\n"
-            + "- Result: passed\n",
-            encoding="utf-8",
-        )
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("fake log\n", encoding="utf-8")
-        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
-
-    monkeypatch.setattr(core, "launch_agent", fake_agent)
-    record = core.run_once(tmp_path)
-
-    assert record is not None
-    assert record["status"] == "completed"
-    assert record["project"] == "demo"
-    assert record["task"] == "Ready"
-    assert record["closeout_validation"]["ok"] is True
-    assert record["closeout_validation"]["checks"] == {
-        "durable_memory_changed": True,
-        "task_mentioned": True,
-        "outcome_recorded": True,
-        "verification_recorded": True,
-    }
-    run_files = list((tmp_path / ".a-exp" / "runs").glob("*.json"))
-    assert len(run_files) == 1
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "log", "-1", "--format=%s"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == "Run a-exp-v2 task for demo"
-    )
-    assert (
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "status", "--short"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        == ""
-    )
+    write_study(tmp_path, "demo", ready_after="2999-01-01T00:00:00Z")
+    assert core.status_json(tmp_path)["studies"]["ready"] == 1
+    assert core.status_json(tmp_path)["work"]["runnable"] == 0
 
 
-def test_run_once_prompt_includes_conventional_spec_hard_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_live_and_stale_markers_derive_running(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "\n".join(
-            [
-                "- [ ] Ready",
-                "  Spec: `projects/demo/tasks/ready.md`",
-                "  Execution mode: conventional",
-                "  Mode policy: hard",
-            ]
-        ),
-    )
-    spec_path = tmp_path / "projects" / "demo" / "tasks" / "ready.md"
-    spec_path.parent.mkdir(parents=True)
-    spec_path.write_text(
-        "---\nexecution_mode: conventional\nmode_policy: hard\nsource: scheduled\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\nready\n```\n",
-        encoding="utf-8",
-    )
-    captured: dict[str, str] = {}
-
-    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
-        captured["prompt"] = prompt
-        readme = root / "projects" / lane.project / "README.md"
-        readme.write_text(
-            readme.read_text(encoding="utf-8")
-            + "\n## Task closeout\n\n"
-            + "Task: Ready\n"
-            + "Mode: conventional\n"
-            + "Status: completed\n"
-            + "Verification:\n"
-            + "- Command: pytest\n"
-            + "- Result: passed\n",
-            encoding="utf-8",
-        )
-        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
-
-    monkeypatch.setattr(core, "launch_agent", fake_agent)
-    record = core.run_once(tmp_path)
-
-    assert record is not None
-    assert record["execution_mode"] == "conventional"
-    assert record["mode_policy"] == "hard"
-    assert record["task_spec"] == "projects/demo/tasks/ready.md"
-    assert "Execution mode: conventional" in captured["prompt"]
-    assert "Mode policy: hard" in captured["prompt"]
-    assert "Task spec: projects/demo/tasks/ready.md" in captured["prompt"]
-
-
-def test_run_once_prompt_includes_goal_spec_hard_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "\n".join(
-            [
-                "- [ ] Pursue goal",
-                "  Spec: `projects/demo/goals/pursue-goal.md`",
-                "  Execution mode: goal",
-                "  Mode policy: hard",
-            ]
-        ),
-    )
-    spec_path = tmp_path / "projects" / "demo" / "goals" / "pursue-goal.md"
-    spec_path.parent.mkdir(parents=True)
-    spec_path.write_text(
-        "---\nexecution_mode: goal\nmode_policy: hard\nsource: scheduled\noriginal_prompt_sha256: abc\n---\n\n## Original user prompt\n\n```text\npursue goal\n```\n",
-        encoding="utf-8",
-    )
-    captured: dict[str, str] = {}
-
-    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
-        captured["prompt"] = prompt
-        readme = root / "projects" / lane.project / "README.md"
-        readme.write_text(
-            readme.read_text(encoding="utf-8")
-            + "\n## Task closeout\n\n"
-            + "Task: Child checkpoint\n"
-            + "Parent goal: Pursue goal\n"
-            + "Mode: goal-mode-child\n"
-            + "Status: completed\n"
-            + "Verification:\n"
-            + "- Command: pytest\n"
-            + "- Result: passed\n"
-            + "\n## Goal closeout\n\n"
-            + "Task: Pursue goal\n"
-            + "Mode: goal\n"
-            + "Status: completed\n"
-            + "Verification:\n"
-            + "- Command: pytest\n"
-            + "- Result: passed\n",
-            encoding="utf-8",
-        )
-        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
-
-    monkeypatch.setattr(core, "launch_agent", fake_agent)
-    record = core.run_once(tmp_path)
-
-    assert record is not None
-    assert record["execution_mode"] == "goal"
-    assert "Execution mode: goal" in captured["prompt"]
-    assert "Mode policy: hard" in captured["prompt"]
-    assert "Goal spec: projects/demo/goals/pursue-goal.md" in captured["prompt"]
-    assert "Mode: goal-mode-child" in captured["prompt"]
-
-
-def test_run_once_fails_when_hard_mode_closeout_mismatches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    core.init_workspace(tmp_path)
-    write_project(
-        tmp_path,
-        "demo",
-        "- [ ] Ready\n  Execution mode: conventional\n",
-    )
-
-    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
-        readme = root / "projects" / lane.project / "README.md"
-        readme.write_text(
-            readme.read_text(encoding="utf-8")
-            + "\n## Task closeout\n\n"
-            + "Task: Ready\n"
-            + "Mode: goal\n"
-            + "Status: completed\n"
-            + "Verification:\n"
-            + "- Command: pytest\n"
-            + "- Result: passed\n",
-            encoding="utf-8",
-        )
-        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
-
-    monkeypatch.setattr(core, "launch_agent", fake_agent)
-
-    with pytest.raises(core.AgentRunFailed):
-        core.run_once(tmp_path)
-
-    run_data = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
-    assert run_data["closeout_validation"]["checks"]["mode_closeout_valid"] is False
-
-
-def test_run_once_fails_closeout_when_project_memory_does_not_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [ ] Ready\n")
-
-    def fake_agent(root: Path, prompt: str, lane: core.Lane, log_path: Path) -> subprocess.CompletedProcess[str]:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("fake log\n", encoding="utf-8")
-        return subprocess.CompletedProcess(["codex"], 0, "ok", "")
-
-    monkeypatch.setattr(core, "launch_agent", fake_agent)
-    with pytest.raises(core.AgentRunFailed):
-        core.run_once(tmp_path)
-
-    run_data = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
-    assert run_data["status"] == "failed"
-    assert run_data["closeout_validation"]["ok"] is False
-
-
-def test_launch_agent_streams_log_while_process_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    codex.write_text(
-        "\n".join(
-            [
-                "#!/bin/sh",
-                "printf 'ready\\n'",
-                "i=0",
-                "while [ $i -lt 40 ]; do",
-                "  if grep -q '\\[stdout\\] ready' .a-exp/logs/live.log; then",
-                "    printf 'observed\\n' >&2",
-                "    exit 0",
-                "  fi",
-                "  i=$((i + 1))",
-                "  sleep 0.05",
-                "done",
-                "printf 'not streamed\\n' >&2",
-                "exit 2",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    codex.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    lane = core.Lane(
-        project="demo",
-        enabled=True,
-        priority=100,
-        model="test",
-        max_duration_ms=5000,
-        tasks=[],
-    )
-
-    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "live.log")
-
-    log_text = (tmp_path / ".a-exp" / "logs" / "live.log").read_text(encoding="utf-8")
-    assert result.returncode == 0
-    assert result.stdout == "ready\n"
-    assert result.stderr == "observed\n"
-    assert "[stdout] ready" in log_text
-    assert "[stderr] observed" in log_text
-    assert "## summary" in log_text
-    assert (tmp_path / ".a-exp" / "logs" / "live.brief.log").exists()
-
-
-def test_launch_agent_writes_brief_log_with_folded_tool_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    codex.write_text(
-        "\n".join(
-            [
-                "#!/bin/sh",
-                "printf 'codex\\n' >&2",
-                "printf 'I am orienting on the project.\\n' >&2",
-                "printf 'exec\\n' >&2",
-                "printf 'python inspect_project.py in /tmp/demo\\n' >&2",
-                "printf ' succeeded in 0ms:\\n' >&2",
-                "printf '# README\\n' >&2",
-                "printf 'lengthy file content\\n' >&2",
-                "printf 'more lengthy file content\\n' >&2",
-                "printf 'codex\\n' >&2",
-                "printf 'I finished reading the project files.\\n' >&2",
-                "printf 'tokens used\\n' >&2",
-                "printf '1,234\\n' >&2",
-                "printf 'Done.\\n'",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    codex.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    lane = core.Lane(
-        project="demo",
-        enabled=True,
-        priority=100,
-        model="test",
-        max_duration_ms=5000,
-        tasks=[],
-    )
-
-    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "brief-demo.log")
-
-    full_log = (tmp_path / ".a-exp" / "logs" / "brief-demo.log").read_text(encoding="utf-8")
-    brief_log = (tmp_path / ".a-exp" / "logs" / "brief-demo.brief.log").read_text(encoding="utf-8")
-    assert result.returncode == 0
-    assert "lengthy file content" in full_log
-    assert "I am orienting on the project." in brief_log
-    assert "Command:" in brief_log
-    assert "Result: succeeded in 0ms:" in brief_log
-    assert "Folded output lines: 3" in brief_log
-    assert "lengthy file content" not in brief_log
-    assert "Tokens used: 1,234" in brief_log
-    assert "Done." in brief_log
-
-
-def test_launch_agent_brief_log_keeps_diff_headers_and_folds_hunks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    codex.write_text(
-        "\n".join(
-            [
-                "#!/bin/sh",
-                "printf 'exec\\n' >&2",
-                "printf 'git diff -- projects/conv/src/targets.py in /tmp/demo\\n' >&2",
-                "printf ' succeeded in 0ms:\\n' >&2",
-                "printf 'diff --git a/projects/conv/src/targets.py b/projects/conv/src/targets.py\\n' >&2",
-                "printf 'index d806f6552f9ddee71a4c38b97fcb4a3189e9e58f..a9a2995f8abb0beebde0584c62e3fc477ce3af9d 100644\\n' >&2",
-                "printf '%s\\n' '--- a/projects/conv/src/targets.py' >&2",
-                "printf '%s\\n' '+++ b/projects/conv/src/targets.py' >&2",
-                "printf '%s\\n' '@@ -19,6 +19,13 @@' >&2",
-                "printf '%s\\n' '+def generated_code_line():' >&2",
-                "printf '%s\\n' '+    return 42' >&2",
-                "printf '%s\\n' ' context line' >&2",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    codex.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    lane = core.Lane(
-        project="demo",
-        enabled=True,
-        priority=100,
-        model="test",
-        max_duration_ms=5000,
-        tasks=[],
-    )
-
-    result = core.launch_agent(tmp_path, "prompt", lane, tmp_path / ".a-exp" / "logs" / "diff-demo.log")
-
-    brief_log = (tmp_path / ".a-exp" / "logs" / "diff-demo.brief.log").read_text(encoding="utf-8")
-    assert result.returncode == 0
-    assert "- Detail: diff --git a/projects/conv/src/targets.py b/projects/conv/src/targets.py" in brief_log
-    assert "- Detail: index d806f6552f9ddee71a4c38b97fcb4a3189e9e58f..a9a2995f8abb0beebde0584c62e3fc477ce3af9d 100644" in brief_log
-    assert "- Detail: --- a/projects/conv/src/targets.py" in brief_log
-    assert "- Detail: +++ b/projects/conv/src/targets.py" in brief_log
-    assert "- Detail: @@ -19,6 +19,13 @@" in brief_log
-    assert "generated_code_line" not in brief_log
-    assert "return 42" not in brief_log
-    assert "Folded output lines: 3" in brief_log
-
-
-def test_no_work_and_active_run_do_not_write_run_records(tmp_path: Path) -> None:
-    core.init_workspace(tmp_path)
-    write_project(tmp_path, "done", "- [x] Finished\n")
-
-    assert core.run_once(tmp_path) is None
-    assert list((tmp_path / ".a-exp" / "runs").glob("*.json")) == []
-
-
-def test_running_marker_blocks_when_pid_is_alive(tmp_path: Path) -> None:
-    core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [ ] Ready\n")
+    write_study(tmp_path, "demo")
     marker = tmp_path / ".a-exp" / "running" / "active.json"
     marker.write_text(
-        json.dumps({"run_id": "active", "project": "demo", "pid": os.getpid(), "started_at": "now"}),
+        json.dumps({"run_id": "active", "project": "demo", "pid": os.getpid()}),
         encoding="utf-8",
     )
-
-    assert core.status_json(tmp_path)["sessions"]["active"] == 1
+    data = core.status_json(tmp_path)
+    assert data["sessions"]["active"] == 1
+    assert data["studies"]["items"][0]["state"] == "running"
+    (tmp_path / "projects" / "demo" / "WORKING.md").write_text("in progress\n")
     assert core.run_once(tmp_path) is None
-    assert list((tmp_path / ".a-exp" / "runs").glob("*.json")) == []
+    (tmp_path / "projects" / "demo" / "WORKING.md").unlink()
+
+    marker.write_text(
+        json.dumps({"run_id": "stale", "project": "demo", "pid": 999_999_999}),
+        encoding="utf-8",
+    )
+    data = core.status_json(tmp_path)
+    assert data["sessions"]["active"] == 0
+    assert not marker.exists()
 
 
-def test_approval_and_experiment_counts(tmp_path: Path) -> None:
+def _claim_and_hold(root: str, queue: Any, release: Any) -> None:
+    try:
+        claim = core.claim_next_study(Path(root))
+        queue.put(None if claim is None else claim[1])
+        release.wait(10)
+    except Exception as exc:  # pragma: no cover - diagnostic transport
+        queue.put(f"error:{exc}")
+
+
+def test_atomic_claim_allows_only_one_process(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [ ] Ready\n")
+    write_study(tmp_path, "demo")
+    context = multiprocessing.get_context("fork")
+    queue = context.Queue()
+    release = context.Event()
+    processes = [
+        context.Process(target=_claim_and_hold, args=(str(tmp_path), queue, release))
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    values = [queue.get(timeout=10), queue.get(timeout=10)]
+    release.set()
+    for process in processes:
+        process.join(timeout=10)
+    assert sum(value is not None for value in values) == 1
+    assert not any(isinstance(value, str) and value.startswith("error:") for value in values)
+
+
+@pytest.mark.parametrize(
+    "next_state", ["ready", "needs_human", "paused", "blocked", "completed"]
+)
+def test_successful_run_applies_each_valid_next_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    next_state: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        return result(successful_closeout(next_state=next_state))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    record = core.run_once(tmp_path)
+    assert record is not None
+    assert record["next_state"] == next_state
+    assert record["experiments"] == ["exp-a", "exp-b"]
+    assert validate_run_record(record) == []
+    state = core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml")
+    assert state.state == next_state
+    assert state.ready_after is not None if next_state == "ready" else state.ready_after is None
+    assert state.consecutive_failures == 0
+    assert len(list((tmp_path / "projects" / "demo" / "sessions").glob("*.yaml"))) == 1
+    assert git(tmp_path, "status", "--short") == ""
+
+
+def test_success_closeout_stages_declared_paths_and_records_checkpoint_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        result_path = tmp_path / "projects" / "demo" / "RESULT.md"
+        result_path.write_text("evidence\n", encoding="utf-8")
+        git(tmp_path, "add", "projects/demo/RESULT.md")
+        git(tmp_path, "commit", "-m", "Record experiment checkpoint")
+        return result(successful_closeout(files=["projects/demo/RESULT.md"]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    record = core.run_once(tmp_path)
+    session = yaml.safe_load(
+        next((tmp_path / "projects" / "demo" / "sessions").glob("*.yaml")).read_text()
+    )
+    assert "projects/demo/RESULT.md" in record["files_changed"]
+    assert len(session["commits"]) == 1
+    assert git(tmp_path, "show", "--format=%s", "--no-patch", session["commits"][0]) == (
+        "Record experiment checkpoint"
+    )
+    assert git(tmp_path, "status", "--short") == ""
+
+
+def test_resume_failure_before_turn_replaces_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "missing-thread", "old-run")
+    calls: list[str | None] = []
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        calls.append(kwargs["thread_id"])
+        if len(calls) == 1:
+            return result(None, returncode=1, thread_id=None, turn_started=False)
+        return result(successful_closeout(next_state="completed"), thread_id="replacement")
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    record = core.run_once(tmp_path)
+    assert calls == ["missing-thread", None]
+    assert record["codex_thread_id"] == "replacement"
+    assert record["replaced_thread_id"] == "missing-thread"
+    assert core.read_thread_id(tmp_path, "demo") == "replacement"
+
+
+def test_clean_infrastructure_failure_retries_then_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(None, returncode=2, thread_id=None, turn_started=False),
+    )
+
+    with pytest.raises(core.AgentRunFailed):
+        core.run_once(tmp_path)
+    state_path = tmp_path / "projects" / "demo" / "STATE.yaml"
+    first = core.load_study_state(state_path)
+    assert first.state == "ready"
+    assert first.consecutive_failures == 1
+    assert first.ready_after is not None
+    core.write_study_state(state_path, replace(first, ready_after=None))
+    commit_all(tmp_path, "Make retry due")
+
+    with pytest.raises(core.AgentRunFailed):
+        core.run_once(tmp_path)
+    second = core.load_study_state(state_path)
+    assert second.state == "failed"
+    assert second.consecutive_failures == 2
+    assert len(list((tmp_path / "projects" / "demo" / "sessions").glob("*.yaml"))) == 2
+    assert git(tmp_path, "status", "--short") == ""
+
+
+def test_runner_exception_becomes_clean_retry_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def explode(**_: Any) -> CodexRunResult:
+        raise OSError("process launch broke")
+
+    monkeypatch.setattr(core, "run_codex", explode)
+    with pytest.raises(core.AgentRunFailed, match="runner exception"):
+        core.run_once(tmp_path)
+    state = core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml")
+    assert state.state == "ready"
+    assert state.consecutive_failures == 1
+    runtime = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
+    assert any("process launch broke" in error for error in runtime["closeout_validation"]["errors"])
+    assert git(tmp_path, "status", "--short") == ""
+
+
+def test_undeclared_dirty_file_preserves_recovery_and_degrades_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        (tmp_path / "unexpected.txt").write_text("preserve me\n", encoding="utf-8")
+        return result(successful_closeout(files=[]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="undeclared"):
+        core.run_once(tmp_path)
+    assert (tmp_path / "unexpected.txt").exists()
+    assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
+    assert core.status_json(tmp_path)["health"] == "degraded"
+    assert core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml").state == "ready"
+
+
+def test_agent_state_edit_is_unsafe_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        (study / "STATE.yaml").write_text("agent-owned: false\n", encoding="utf-8")
+        return result(successful_closeout(files=["projects/demo/STATE.yaml"]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="STATE.yaml"):
+        core.run_once(tmp_path)
+    assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
+
+
+def test_approvals_experiments_and_kanban(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
     (tmp_path / "APPROVAL_QUEUE.md").write_text(
         "# Approval Queue\n\n## Pending\n\n- [ ] approve budget\n\n## Completed\n",
         encoding="utf-8",
     )
-    exp_dir = tmp_path / "projects" / "demo" / "experiments" / "exp1"
-    exp_dir.mkdir(parents=True)
-    (exp_dir / "progress.json").write_text('{"status": "running"}\n', encoding="utf-8")
-
-    data = core.status_json(tmp_path)
-    assert data["approvals"]["pending"] == 1
-    assert data["experiments"]["running"] == 1
-
-
-def test_kanban_overwrites_project_file_and_reads_runs(tmp_path: Path) -> None:
-    core.init_workspace(tmp_path)
-    write_project(tmp_path, "demo", "- [x] Finished\n")
-    run_dir = tmp_path / ".a-exp" / "runs"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "run.json").write_text(
-        json.dumps(
+    experiment = study / "experiments" / "exp-a"
+    experiment.mkdir(parents=True)
+    (experiment / "EXPERIMENT.md").write_text(
+        "# exp-a\n\n## Findings\n\n- Faster and stable.\n",
+        encoding="utf-8",
+    )
+    (experiment / "progress.json").write_text('{"status": "running"}\n', encoding="utf-8")
+    session = study / "sessions" / "run.yaml"
+    session.parent.mkdir()
+    session.write_text(
+        yaml.safe_dump(
             {
                 "run_id": "run",
-                "project": "demo",
-                "task": "Finished",
                 "status": "completed",
-                "ended_at": "2026-05-31T00:00:00Z",
-                "log_file": ".a-exp/logs/demo.log",
+                "started_at": "2026-08-01T00:00:00Z",
+                "summary": "Compared methods",
+                "artifacts": ["projects/demo/artifacts/plot.png"],
             }
         ),
         encoding="utf-8",
     )
-    output = tmp_path / "reports" / "kanban" / "demo.md"
-    output.write_text("old\n", encoding="utf-8")
+    commit_all(tmp_path, "Record evidence")
 
-    written = generate_kanban(tmp_path)
+    data = core.status_json(tmp_path)
+    assert data["approvals"]["pending"] == 1
+    assert data["experiments"]["running"] == 1
+    assert generate_kanban(tmp_path) == [tmp_path / "reports" / "kanban" / "demo.md"]
+    text = (tmp_path / "reports" / "kanban" / "demo.md").read_text(encoding="utf-8")
+    assert "Lifecycle: **needs_human**" in text
+    assert "Faster and stable" in text
+    assert "projects/demo/artifacts/plot.png" in text
 
-    assert written == [output]
-    text = output.read_text(encoding="utf-8")
-    assert "## demo-Tasks" in text
-    assert "**Runs**" in text
-    assert "Finished: completed" in text
+
+def test_fake_overnight_sequence_resumes_study_thread_without_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "alpha")
+    write_study(tmp_path, "beta")
+    config = load_config(tmp_path / ".a-exp" / "config.yaml")
+    config.defaults["cooldown_seconds"] = 0
+    config.projects["alpha"] = ProjectConfig(priority=1)
+    config.projects["beta"] = ProjectConfig(priority=2)
+    dump_config(config, tmp_path / ".a-exp" / "config.yaml")
+    commit_all(tmp_path, "Configure overnight studies")
+    calls: list[tuple[str, str | None]] = []
+    beta_runs = 0
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        nonlocal beta_runs
+        markers = list((tmp_path / ".a-exp" / "running").glob("*.json"))
+        assert len(markers) == 1
+        study = kwargs["study"]
+        calls.append((study, kwargs["thread_id"]))
+        if study == "alpha":
+            return result(
+                successful_closeout(next_state="needs_human", experiments=["alpha-1", "alpha-2"]),
+                thread_id="thread-alpha",
+            )
+        beta_runs += 1
+        next_state = "ready" if beta_runs == 1 else "completed"
+        return result(
+            successful_closeout(next_state=next_state, experiments=[f"beta-{beta_runs}"]),
+            thread_id="thread-beta",
+        )
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    first = core.run_once(tmp_path)
+    second = core.run_once(tmp_path)
+    third = core.run_once(tmp_path)
+
+    assert first["next_state"] == "needs_human"
+    assert second["next_state"] == "ready"
+    assert third["next_state"] == "completed"
+    assert calls == [
+        ("alpha", None),
+        ("beta", None),
+        ("beta", "thread-beta"),
+    ]
+    assert core.load_study_state(tmp_path / "projects" / "alpha" / "STATE.yaml").state == (
+        "needs_human"
+    )
+    assert core.load_study_state(tmp_path / "projects" / "beta" / "STATE.yaml").state == (
+        "completed"
+    )
+    assert len(list((tmp_path / "projects" / "beta" / "sessions").glob("*.yaml"))) == 2
+    assert list((tmp_path / ".a-exp" / "running").glob("*.json")) == []

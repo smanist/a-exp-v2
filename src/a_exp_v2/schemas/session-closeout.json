@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "next_state",
+    "summary",
+    "experiments",
+    "verification",
+    "files_changed",
+    "artifacts",
+    "next_direction",
+    "open_questions",
+    "budget_used"
+  ],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["progress", "needs_human", "paused", "blocked", "completed"]
+    },
+    "next_state": {
+      "type": "string",
+      "enum": ["ready", "needs_human", "paused", "blocked", "completed"]
+    },
+    "summary": {"type": "string", "minLength": 1},
+    "experiments": {"type": "array", "items": {"type": "string"}},
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "result"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "result": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "files_changed": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {"type": "array", "items": {"type": "string"}},
+    "next_direction": {"type": ["string", "null"]},
+    "open_questions": {"type": "array", "items": {"type": "string"}},
+    "budget_used": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_seconds", "experiments"],
+      "properties": {
+        "wall_seconds": {"type": "number", "minimum": 0},
+        "experiments": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

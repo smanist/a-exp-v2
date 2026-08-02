@@ -1,106 +1,43 @@
 ---
 name: project
-description: Scaffold, augment, or propose a-exp-v2 projects.
+description: Scaffold, shape, or augment durable a-exp-v2 studies.
 ---
 
 # Project
 
-Use this skill to create, propose, or augment projects under `projects/`.
+Use this skill for interactive creation and shaping under `projects/`.
 
-Modes:
-
-- `scaffold`: human requested a new project.
-- `augment`: human requested additional context, tasks, plans, budgets, or
-  experiments for an existing project.
-- `propose`: agent identified an evidence-backed project candidate.
-
-## Scaffold
-
-Create:
+For a new study, create only:
 
 ```text
-projects/<project>/README.md
-projects/<project>/TASKS.md
-projects/<project>/tasks/ or projects/<project>/goals/ when adding runnable work
+projects/<study>/README.md
+projects/<study>/GOAL.md
+projects/<study>/STATE.yaml
 ```
 
-Add `budget.yaml`, `ledger.yaml`, `plans/`, or `experiments/` only when the
-project needs them.
-
-## Augment
-
-Keep the project mission stable unless the human explicitly changes it. Add
-context, plans, tasks, budgets, or experiment records that directly support the
-requested scope.
-
-For experiment-heavy projects or tasks, check `protocols/registry.yaml`. If an
-existing protocol fits, reference its id in the task, plan, or experiment
-record. Prefer protocol-backed experiment records for recurring experiment
-types such as convergence studies.
-
-Do not create a new protocol for one-off work. If repeated project experience
-suggests a reusable pattern, write a proposal or follow-up task to extract a
-protocol.
-
-## Propose
-
-Agent-initiated proposals require human approval before activation. Write the
-proposal under `reports/project/` or add an entry to `APPROVAL_QUEUE.md`.
-
-## Task Shape
-
-Top-level tasks are scheduler and closeout units, not implementation steps.
-Prefer one top-level task for a coherent goal-mode unit. Put internal steps
-in the task or goal spec. Split into multiple top-level tasks only when the
-pieces should be independently scheduled, retried, blocked, approved, or closed
-out.
-
-When either shape is reasonable and the choice materially changes how the
-project will be operated, ask the human whether they prefer a single goal-mode
-task or a broken-down task series.
-
-New runnable work should be spec-backed. Put the visible queue item in
-`TASKS.md`, and preserve the full original prompt and hard execution mode in a
-canonical spec file.
-
-```markdown
-- [ ] Imperative task title
-  Spec: `projects/<project>/tasks/<task-id>.md`
-  Execution mode: conventional|goal
-  Mode policy: hard
-  Priority: high|medium|low
-```
-
-Use `projects/<project>/tasks/<task-id>.md` for `conventional` work and
-`projects/<project>/goals/<goal-id>.md` for `goal` work. Root specs must start
-with:
+`README.md` records environment and orientation. `GOAL.md` must state the
+objective, evidence criteria, autonomy envelope, and stop conditions. Initialize
+strict state as:
 
 ```yaml
----
-execution_mode: conventional|goal
-mode_policy: hard
-source: direct|scheduled|project-augment
-original_prompt_sha256: <sha256 of original prompt>
----
+schema_version: 1
+state: shaping
+ready_after: null
+summary: Initial shaping
+next_direction: null
+open_questions: []
+requires: []
+last_run_id: null
+consecutive_failures: 0
 ```
 
-Root specs must include:
+Add `PLAN.md`, `DECISIONS.md`, `STEERING.md`, `experiments/`, or `sessions/`
+only when useful. For experiment-heavy studies, consult
+`protocols/registry.yaml` and reference applicable protocols.
 
-````markdown
-## Original user prompt
+Keep the goal stable unless the human changes it. Agent-initiated study
+proposals remain in `reports/project/` or `APPROVAL_QUEUE.md` until accepted.
+There is no project-creation CLI command and no study-level scheduling queue.
 
-```text
-<recorded original prompt>
-```
-````
-
-When recording the original prompt, normalize skill invocation links before
-writing the prompt or hashing it: collapse links that point at a `SKILL.md`
-file to a skill-name alias. For example,
-`[$project](/path/to/skills/project/SKILL.md)` becomes `[project]`. Preserve all
-other prompt text verbatim.
-
-## Git Closeout
-
-After writing repo changes, run `git status --short`, commit the intended
-changes, and leave the workspace clean except for intentionally ignored files.
+When shaping is complete, set `state: ready` only with human intent or explicit
+authorization, then commit all changes and leave the checkout clean.

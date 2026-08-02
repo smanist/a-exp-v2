@@ -174,7 +174,8 @@ def test_external_signal_force_kills_codex_group_after_grace(tmp_path: Path) -> 
         "output_schema=root/'schema.json', log_path=root/'run.jsonl', "
         "brief_log_path=root/'brief.jsonl', output_message=root/'last.json', "
         "timeout_seconds=30, model=None, sandbox='workspace-write', "
-        "approval_policy='never', thread_id=None, terminate_grace_seconds=0.2)\n"
+        "approval_policy='never', thread_id=None, "
+        "external_signal_grace_seconds=0.2)\n"
     )
     source = Path(__file__).resolve().parents[1] / "src"
     env = os.environ.copy()

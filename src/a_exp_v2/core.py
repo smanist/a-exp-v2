@@ -22,7 +22,6 @@ from .config import (
     DEFAULT_COOLDOWN_SECONDS,
     DEFAULT_MAX_RUN_DURATION_MS,
     DEFAULT_MODEL,
-    DEFAULT_PRIORITY,
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_SANDBOX,
     LAYOUT_VERSION,
@@ -43,6 +42,7 @@ THREADS_DIR = Path(".a-exp/threads")
 OUTPUT_DIR = Path(".a-exp/output")
 RECOVERY_DIR = Path(".a-exp/recovery")
 LOCK_PATH = Path(".a-exp/workspace.lock")
+RUNTIME_DIRS = (RUNS_DIR, LOGS_DIR, RUNNING_DIR, THREADS_DIR, OUTPUT_DIR, RECOVERY_DIR)
 
 DURABLE_STATES = {
     "shaping",
@@ -182,6 +182,7 @@ def init_workspace(root: Path) -> list[Path]:
     git_dir = init_git_repo_if_needed(root)
     if git_dir is not None:
         created.append(git_dir)
+    runtime_root_path(root, create=True)
     for relative in (
         ".a-exp/runs",
         ".a-exp/logs",
@@ -202,9 +203,12 @@ def init_workspace(root: Path) -> list[Path]:
             path.mkdir(parents=True, exist_ok=True)
             created.append(path)
 
+    for relative in RUNTIME_DIRS:
+        runtime_directory(root, relative, create=True)
+
     files = {
-        root / CONFIG_PATH: default_config_text(),
-        root / ".a-exp/kit.lock.yaml": "source: local\nversion: 0.2.0\n",
+        runtime_file_path(root, CONFIG_PATH): default_config_text(),
+        runtime_file_path(root, Path(".a-exp/kit.lock.yaml")): "source: local\nversion: 0.2.0\n",
         root / ".gitignore": default_gitignore_text(),
         root / "AGENTS.md": default_agents_text(),
         root / "modules/registry.yaml": "entries: []\n",
@@ -573,8 +577,9 @@ def default_approval_queue() -> str:
 
 
 def load_workspace_config(root: Path) -> WorkspaceConfig:
+    config_path = runtime_file_path(root, CONFIG_PATH)
     try:
-        return load_config(root / CONFIG_PATH)
+        return load_config(config_path)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise WorkspaceError(f"Invalid {CONFIG_PATH}: {exc}") from exc
 
@@ -683,14 +688,123 @@ def project_value(config: WorkspaceConfig, project: ProjectConfig, key: str, def
     return config.defaults.get(key, default)
 
 
-def contained_path(root: Path, path: Path, description: str) -> Path:
-    workspace = root.resolve()
-    resolved = path.resolve(strict=False)
+def contained_path(
+    root: Path,
+    path: Path,
+    description: str,
+    *,
+    within: Path | None = None,
+) -> Path:
     try:
-        resolved.relative_to(workspace)
+        workspace = root.resolve()
+        boundary = (within or root).resolve(strict=False)
+        resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise WorkspaceError(f"{description} cannot be resolved safely: {path}: {exc}") from exc
+    try:
+        boundary.relative_to(workspace)
+    except ValueError as exc:
+        raise WorkspaceError(f"{description} boundary escapes workspace: {within or root}") from exc
+    try:
+        resolved.relative_to(boundary)
     except ValueError as exc:
         raise WorkspaceError(f"{description} escapes workspace: {path}") from exc
     return path
+
+
+def safe_directory(
+    root: Path,
+    path: Path,
+    description: str,
+    *,
+    within: Path,
+    create: bool = False,
+) -> Path:
+    contained_path(root, path, description, within=within)
+    if path.is_symlink():
+        raise WorkspaceError(f"{description} must not be a symlink: {path}")
+    if path.exists() and not path.is_dir():
+        raise WorkspaceError(f"{description} must be a directory: {path}")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+        contained_path(root, path, description, within=within)
+    return path
+
+
+def safe_file(
+    root: Path,
+    path: Path,
+    description: str,
+    *,
+    within: Path,
+) -> Path:
+    contained_path(root, path, description, within=within)
+    if path.is_symlink():
+        raise WorkspaceError(f"{description} must not be a symlink: {path}")
+    if path.exists() and not path.is_file():
+        raise WorkspaceError(f"{description} must be a regular file: {path}")
+    return path
+
+
+def runtime_root_path(root: Path, *, create: bool = False) -> Path:
+    path = root / ".a-exp"
+    return safe_directory(root, path, "runtime directory", within=root, create=create)
+
+
+def runtime_directory(root: Path, relative: Path, *, create: bool = False) -> Path:
+    if not relative.parts or relative.parts[0] != ".a-exp":
+        raise WorkspaceError(f"runtime path must be under .a-exp: {relative}")
+    runtime_root = runtime_root_path(root, create=create)
+    path = root / relative
+    return safe_directory(
+        root,
+        path,
+        f"runtime directory {relative}",
+        within=runtime_root,
+        create=create,
+    )
+
+
+def runtime_file_path(root: Path, relative: Path) -> Path:
+    if not relative.parts or relative.parts[0] != ".a-exp":
+        raise WorkspaceError(f"runtime path must be under .a-exp: {relative}")
+    parent = runtime_directory(root, relative.parent, create=True)
+    return safe_file(root, root / relative, f"runtime file {relative}", within=parent)
+
+
+def study_file_path(root: Path, path: Path, filename: str) -> Path:
+    return safe_file(
+        root,
+        path / filename,
+        f"study file {path.name}/{filename}",
+        within=path,
+    )
+
+
+def study_directory_path(
+    root: Path,
+    path: Path,
+    dirname: str,
+    *,
+    create: bool = False,
+) -> Path:
+    return safe_directory(
+        root,
+        path / dirname,
+        f"study directory {path.name}/{dirname}",
+        within=path,
+        create=create,
+    )
+
+
+def runtime_layout_issues(root: Path) -> list[str]:
+    issues: list[str] = []
+    for relative in RUNTIME_DIRS:
+        try:
+            runtime_directory(root, relative, create=True)
+        except WorkspaceError as exc:
+            issues.append(str(exc))
+    return sorted(set(issues))
 
 
 def study_path(root: Path, project: str) -> Path:
@@ -698,26 +812,32 @@ def study_path(root: Path, project: str) -> Path:
         name = validate_project_id(project)
     except ValueError as exc:
         raise WorkspaceError(f"Invalid study ID {project!r}: {exc}") from exc
-    projects_root = contained_path(root, root / "projects", "projects directory")
+    projects_root = safe_directory(
+        root,
+        root / "projects",
+        "projects directory",
+        within=root,
+    )
     path = projects_root / name
-    contained_path(root, path, f"study {name!r}")
+    safe_directory(root, path, f"study {name!r}", within=projects_root)
     return path
 
 
 def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
     config = load_workspace_config(root)
     active, marker_issues = reconcile_running_markers(root)
+    layout_issues = runtime_layout_issues(root)
     capabilities = load_host_capabilities()
     projects_root = root / "projects"
     try:
-        contained_path(root, projects_root, "projects directory")
+        safe_directory(root, projects_root, "projects directory", within=root)
     except WorkspaceError as exc:
-        return [], sorted({*marker_issues, str(exc)})
+        return [], sorted({*marker_issues, *layout_issues, str(exc)})
     names = set(config.projects)
     if projects_root.is_dir():
         names.update(path.name for path in projects_root.iterdir() if path.is_dir())
     studies: list[Study] = []
-    issues = list(marker_issues)
+    issues = [*marker_issues, *layout_issues]
     for project in sorted(set(active) - names):
         issues.append(f"Active marker references unknown study: {project}")
     for name in sorted(names):
@@ -749,12 +869,44 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                 )
             )
             continue
-        required = [path / "README.md", path / "GOAL.md", path / "STATE.yaml"]
-        missing = [str(item.relative_to(root)) for item in required if not item.is_file()]
-        valid = not missing
-        invalid_reason = f"Missing {', '.join(missing)}" if missing else None
+        required: list[Path] = []
+        invalid_reason: str | None = None
         try:
-            state_data = load_study_state(path / "STATE.yaml") if valid else default_invalid_state()
+            required = [study_file_path(root, path, name) for name in ("README.md", "GOAL.md", "STATE.yaml")]
+            missing = [str(item.relative_to(root)) for item in required if not item.is_file()]
+            if missing:
+                invalid_reason = f"Missing {', '.join(missing)}"
+            for filename in ("PLAN.md", "DECISIONS.md", "STEERING.md"):
+                candidate = path / filename
+                if os.path.lexists(candidate):
+                    study_file_path(root, path, filename)
+            for dirname in ("sessions", "experiments"):
+                candidate = path / dirname
+                if os.path.lexists(candidate):
+                    directory = study_directory_path(root, path, dirname)
+                    if dirname == "sessions":
+                        for record_path in directory.glob("*.yaml"):
+                            safe_file(
+                                root,
+                                record_path,
+                                f"session record for {name}",
+                                within=directory,
+                            )
+                    else:
+                        for pattern in ("*/EXPERIMENT.md", "*/progress.json"):
+                            for experiment_path in directory.glob(pattern):
+                                safe_file(
+                                    root,
+                                    experiment_path,
+                                    f"experiment record for {name}",
+                                    within=directory,
+                                )
+            valid = invalid_reason is None
+            state_data = load_study_state(required[2]) if valid else default_invalid_state()
+        except WorkspaceError as exc:
+            valid = False
+            invalid_reason = f"Invalid projects/{name}: {exc}"
+            state_data = default_invalid_state()
         except ValueError as exc:
             valid = False
             invalid_reason = f"Invalid projects/{name}/STATE.yaml: {exc}"
@@ -810,8 +962,13 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                 active_run_id=active.get(name),
             )
         )
-    if any((root / RECOVERY_DIR).glob("*.json")):
-        issues.append("Recovery records require human resolution under .a-exp/recovery/")
+    try:
+        recovery_directory = runtime_directory(root, RECOVERY_DIR, create=True)
+    except WorkspaceError as exc:
+        issues.append(str(exc))
+    else:
+        if any(recovery_directory.glob("*.json")):
+            issues.append("Recovery records require human resolution under .a-exp/recovery/")
     return studies, sorted(set(issues))
 
 
@@ -831,13 +988,13 @@ def default_invalid_state() -> StudyState:
 def set_project_enabled(root: Path, project: str, enabled: bool) -> None:
     path = study_path(root, project)
     for filename in ("README.md", "GOAL.md", "STATE.yaml"):
-        if not (path / filename).is_file():
+        if not study_file_path(root, path, filename).is_file():
             raise WorkspaceError(f"Project is not a valid study: projects/{project}")
     try:
-        load_study_state(path / "STATE.yaml")
+        load_study_state(study_file_path(root, path, "STATE.yaml"))
     except ValueError as exc:
         raise WorkspaceError(f"Project is not a valid study: projects/{project}: {exc}") from exc
-    config_path = root / CONFIG_PATH
+    config_path = runtime_file_path(root, CONFIG_PATH)
     config = load_workspace_config(root)
     item = config.projects.get(project, ProjectConfig())
     item.enabled = enabled
@@ -865,16 +1022,23 @@ def running_experiments(root: Path, studies: list[Study] | None = None) -> int:
     valid_studies = studies
     if valid_studies is None:
         valid_studies, _ = discover_studies(root)
-    paths = (
-        path
-        for study in valid_studies
-        if study.valid
-        for path in sorted((study.path / "experiments").glob("*/progress.json"))
-    )
-    for path in paths:
+    paths: list[tuple[Study, Path]] = []
+    for study in valid_studies:
+        if not study.valid:
+            continue
+        directory = study_directory_path(root, study.path, "experiments")
+        paths.extend((study, path) for path in sorted(directory.glob("*/progress.json")))
+    for study, path in paths:
         try:
-            status = json.loads(path.read_text(encoding="utf-8")).get("status")
-        except (OSError, json.JSONDecodeError):
+            directory = study_directory_path(root, study.path, "experiments")
+            progress_path = safe_file(
+                root,
+                path,
+                f"experiment progress for {study.project}",
+                within=directory,
+            )
+            status = json.loads(progress_path.read_text(encoding="utf-8")).get("status")
+        except (OSError, WorkspaceError, json.JSONDecodeError):
             continue
         if status in ACTIVE_EXPERIMENT_STATUSES:
             count += 1
@@ -992,10 +1156,17 @@ def run_count(root: Path, project: str) -> int:
 def session_records(root: Path, project: str) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     path = study_path(root, project)
-    for path in sorted((path / "sessions").glob("*.yaml")):
+    directory = study_directory_path(root, path, "sessions")
+    for path in sorted(directory.glob("*.yaml")):
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
+            record_path = safe_file(
+                root,
+                path,
+                f"session record for {project}",
+                within=directory,
+            )
+            data = yaml.safe_load(record_path.read_text(encoding="utf-8")) or {}
+        except (OSError, WorkspaceError, yaml.YAMLError):
             continue
         if isinstance(data, dict):
             values.append(data)
@@ -1004,8 +1175,7 @@ def session_records(root: Path, project: str) -> list[dict[str, Any]]:
 
 @contextlib.contextmanager
 def workspace_lock(root: Path) -> Iterator[None]:
-    path = root / LOCK_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = runtime_file_path(root, LOCK_PATH)
     with path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
@@ -1025,12 +1195,20 @@ def _pid_alive(pid: int) -> bool:
 def reconcile_running_markers(root: Path) -> tuple[dict[str, str], list[str]]:
     active: dict[str, str] = {}
     issues: list[str] = []
-    directory = root / RUNNING_DIR
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory = runtime_directory(root, RUNNING_DIR, create=True)
+    except WorkspaceError as exc:
+        return active, [str(exc)]
     for path in sorted(directory.glob("*.json")):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            marker_path = safe_file(
+                root,
+                path,
+                "running marker",
+                within=directory,
+            )
+            data = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, WorkspaceError, json.JSONDecodeError):
             issues.append(f"Invalid running marker: {path.relative_to(root)}")
             continue
         project = data.get("project")
@@ -1103,7 +1281,7 @@ def claim_next_study(root: Path) -> tuple[Study, str, Path, str] | None:
             return None
         run_id = f"{utc_now_dt().strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         started_at = utc_now()
-        marker_path = root / RUNNING_DIR / f"{run_id}.json"
+        marker_path = runtime_file_path(root, RUNNING_DIR / f"{run_id}.json")
         atomic_write_json(
             marker_path,
             {
@@ -1121,8 +1299,7 @@ def thread_record_path(root: Path, project: str) -> Path:
         name = validate_project_id(project)
     except ValueError as exc:
         raise WorkspaceError(f"Invalid study ID {project!r}: {exc}") from exc
-    directory = contained_path(root, root / THREADS_DIR, "thread-record directory")
-    return contained_path(root, directory / f"{name}.json", f"thread record for {name!r}")
+    return runtime_file_path(root, THREADS_DIR / f"{name}.json")
 
 
 def read_thread_id(root: Path, project: str) -> str | None:
@@ -1237,15 +1414,25 @@ def run_once(root: Path) -> dict[str, Any] | None:
     if claim is None:
         return None
     study, run_id, marker_path, started_at = claim
-    run_path = root / RUNS_DIR / f"{run_id}.json"
-    log_path = root / LOGS_DIR / f"{study.project}-{run_id}.jsonl"
-    brief_log_path = brief_log_path_for(log_path)
-    output_message = root / OUTPUT_DIR / f"{run_id}.json"
-    base_commit = git_head(root)
-    goal_hash = content_hash(study.path / "GOAL.md")
-    steering_hash = content_hash(study.path / "STEERING.md")
-    previous_thread_id = read_thread_id(root, study.project)
-    prompt = workflow_prompt(study, run_id)
+    try:
+        run_path = runtime_file_path(root, RUNS_DIR / f"{run_id}.json")
+        log_path = runtime_file_path(root, LOGS_DIR / f"{study.project}-{run_id}.jsonl")
+        brief_log_path = brief_log_path_for(log_path)
+        runtime_file_path(root, brief_log_path.relative_to(root))
+        output_message = runtime_file_path(root, OUTPUT_DIR / f"{run_id}.json")
+        base_commit = git_head(root)
+        goal_hash = content_hash(study_file_path(root, study.path, "GOAL.md"))
+        steering_path = study.path / "STEERING.md"
+        steering_hash = (
+            content_hash(study_file_path(root, study.path, "STEERING.md"))
+            if os.path.lexists(steering_path)
+            else None
+        )
+        previous_thread_id = read_thread_id(root, study.project)
+        prompt = workflow_prompt(study, run_id)
+    except Exception:
+        marker_path.unlink(missing_ok=True)
+        raise
     result: CodexRunResult | None = None
     replaced_thread_id: str | None = None
     try:
@@ -1345,7 +1532,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
         if undeclared:
             errors.append(f"undeclared changed path(s): {', '.join(undeclared)}")
         if errors:
-            failure_record = handle_failed_run(
+            failure_record = handle_failed_run_safely(
                 root=root,
                 study=study,
                 run_id=run_id,
@@ -1386,7 +1573,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
             )
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
-            failure_record = handle_failed_run(
+            failure_record = handle_failed_run_safely(
                 root=root,
                 study=study,
                 run_id=run_id,
@@ -1443,7 +1630,14 @@ def close_successful_run(
         last_run_id=run_id,
         consecutive_failures=0,
     )
-    session_path = study.path / "sessions" / f"{run_id}.yaml"
+    sessions_directory = study_directory_path(root, study.path, "sessions", create=True)
+    session_path = safe_file(
+        root,
+        sessions_directory / f"{run_id}.yaml",
+        f"session record for {study.project}",
+        within=sessions_directory,
+    )
+    state_path = study_file_path(root, study.path, "STATE.yaml")
     session_record = {
         "schema_version": 1,
         "run_id": run_id,
@@ -1469,10 +1663,10 @@ def close_successful_run(
         "open_questions": closeout["open_questions"],
     }
     atomic_write_text(session_path, yaml.safe_dump(session_record, sort_keys=False))
-    write_study_state(study.path / "STATE.yaml", state)
+    write_study_state(state_path, state)
     owned = {
         session_path.relative_to(root).as_posix(),
-        (study.path / "STATE.yaml").relative_to(root).as_posix(),
+        state_path.relative_to(root).as_posix(),
     }
     dirty = set(git_status_paths(root))
     unexpected = sorted(dirty - declared - owned)
@@ -1503,7 +1697,7 @@ def close_successful_run(
         ),
         "closeout_validation": {"ok": True, "errors": []},
     }
-    atomic_write_json(run_path, runtime)
+    atomic_write_json(runtime_file_path(root, run_path.relative_to(root)), runtime)
     return runtime
 
 
@@ -1582,7 +1776,7 @@ def handle_failed_run(
     }
     if not clean or unsafe:
         write_recovery(root, run_id, study.project, errors)
-        atomic_write_json(run_path, runtime)
+        atomic_write_json(runtime_file_path(root, run_path.relative_to(root)), runtime)
         return runtime
     failures = study.state_data.consecutive_failures + 1
     next_state = "failed" if failures >= 2 else "ready"
@@ -1597,7 +1791,14 @@ def handle_failed_run(
         consecutive_failures=failures,
     )
     runtime["next_state"] = next_state
-    session_path = study.path / "sessions" / f"{run_id}.yaml"
+    sessions_directory = study_directory_path(root, study.path, "sessions", create=True)
+    session_path = safe_file(
+        root,
+        sessions_directory / f"{run_id}.yaml",
+        f"failure session record for {study.project}",
+        within=sessions_directory,
+    )
+    state_path = study_file_path(root, study.path, "STATE.yaml")
     failure_session = {
         "schema_version": 1,
         "run_id": run_id,
@@ -1637,20 +1838,67 @@ def handle_failed_run(
         }
     )
     atomic_write_text(session_path, yaml.safe_dump(failure_session, sort_keys=False))
-    write_study_state(study.path / "STATE.yaml", state)
+    write_study_state(state_path, state)
     closeout_commit = commit_workspace_changes(
         root,
         f"Record failed a-exp run {run_id} for {study.project}",
-        [session_path.relative_to(root), (study.path / "STATE.yaml").relative_to(root)],
+        [session_path.relative_to(root), state_path.relative_to(root)],
     )
     runtime["closeout_commit"] = closeout_commit
-    atomic_write_json(run_path, runtime)
+    atomic_write_json(runtime_file_path(root, run_path.relative_to(root)), runtime)
     return runtime
+
+
+def handle_failed_run_safely(**kwargs: Any) -> dict[str, Any]:
+    try:
+        return handle_failed_run(**kwargs)
+    except Exception as exc:
+        root = kwargs["root"]
+        study = kwargs["study"]
+        run_id = kwargs["run_id"]
+        result = kwargs["result"]
+        run_path = kwargs["run_path"]
+        log_path = kwargs["log_path"]
+        brief_log_path = kwargs["brief_log_path"]
+        errors = list(kwargs["errors"])
+        errors.append(f"failure closeout failed: {type(exc).__name__}: {exc}")
+        fallback = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "project": study.project,
+            "study": study.project,
+            "status": "failed",
+            "study_outcome": "infrastructure_failed",
+            "previous_state": study.state_data.state,
+            "next_state": "recovery_required",
+            "started_at": kwargs["started_at"],
+            "ended_at": utc_now(),
+            "codex_thread_id": kwargs["thread_id"],
+            "replaced_thread_id": kwargs["replaced_thread_id"],
+            "exit_code": result.returncode,
+            "timed_out": result.timed_out,
+            "duration_seconds": result.duration_seconds,
+            "log_file": log_path.relative_to(root).as_posix(),
+            "brief_log_file": brief_log_path.relative_to(root).as_posix(),
+            "closeout_validation": {"ok": False, "errors": sorted(set(errors))},
+        }
+        try:
+            write_recovery(root, run_id, study.project, errors)
+        except Exception as recovery_exc:
+            errors.append(
+                f"recovery record failed: {type(recovery_exc).__name__}: {recovery_exc}"
+            )
+            fallback["closeout_validation"]["errors"] = sorted(set(errors))
+        try:
+            atomic_write_json(runtime_file_path(root, run_path.relative_to(root)), fallback)
+        except Exception:
+            pass
+        return fallback
 
 
 def write_recovery(root: Path, run_id: str, project: str, errors: list[str]) -> None:
     atomic_write_json(
-        root / RECOVERY_DIR / f"{run_id}.json",
+        runtime_file_path(root, RECOVERY_DIR / f"{run_id}.json"),
         {
             "run_id": run_id,
             "project": project,

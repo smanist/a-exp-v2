@@ -140,6 +140,17 @@ def test_init_creates_nested_git_root(tmp_path: Path) -> None:
     assert Path(git(workspace, "rev-parse", "--show-toplevel")) == workspace
 
 
+def test_init_rejects_external_runtime_root_before_writing(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-runtime-root"
+    outside.mkdir()
+    (tmp_path / ".a-exp").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(core.WorkspaceError, match="runtime directory escapes workspace"):
+        core.init_workspace(tmp_path)
+
+    assert list(outside.iterdir()) == []
+
+
 def test_state_validation_and_invalid_discovery(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     path = write_study(tmp_path, "bad", commit=False)
@@ -303,6 +314,44 @@ def test_discovery_rejects_study_symlink_that_escapes_workspace(tmp_path: Path) 
     threads.symlink_to(outside_threads, target_is_directory=True)
     with pytest.raises(core.WorkspaceError, match="escapes workspace"):
         core.thread_record_path(tmp_path, "demo")
+
+
+def test_discovery_rejects_external_sessions_directory(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-sessions"
+    outside.mkdir()
+    (study / "sessions").symlink_to(outside, target_is_directory=True)
+    commit_all(tmp_path, "Add invalid sessions link")
+
+    data = core.status_json(tmp_path)
+
+    assert data["health"] == "degraded"
+    assert data["studies"]["invalid"] == 1
+    assert data["work"]["runnable"] == 0
+    assert any("sessions" in warning and "escapes workspace" in warning for warning in data["warnings"])
+    with pytest.raises(core.WorkspaceError, match="degraded"):
+        core.run_once(tmp_path)
+    assert list(outside.iterdir()) == []
+
+
+def test_runtime_directory_symlink_degrades_before_claim(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    runs = tmp_path / ".a-exp" / "runs"
+    runs.rmdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-runs"
+    outside.mkdir()
+    runs.symlink_to(outside, target_is_directory=True)
+
+    data = core.status_json(tmp_path)
+
+    assert data["health"] == "degraded"
+    assert data["work"]["runnable"] == 0
+    assert any(".a-exp/runs" in warning for warning in data["warnings"])
+    with pytest.raises(core.WorkspaceError, match="degraded"):
+        core.run_once(tmp_path)
+    assert list(outside.iterdir()) == []
 
 
 def test_selection_ready_after_priority_last_run_and_id(tmp_path: Path) -> None:
@@ -615,6 +664,37 @@ def test_closeout_oserror_creates_recovery_record(
     recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
     assert any("session storage unavailable" in error for error in recovery["errors"])
     assert not list((tmp_path / ".a-exp" / "running").glob("*.json"))
+
+
+def test_failure_closeout_oserror_falls_back_to_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(None, returncode=2, thread_id=None, turn_started=False),
+    )
+    original_atomic_write = core.atomic_write_text
+
+    def fail_failure_session(path: Path, content: str) -> None:
+        if path.parent.name == "sessions":
+            raise OSError("failure session storage unavailable")
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(core, "atomic_write_text", fail_failure_session)
+
+    with pytest.raises(core.AgentRunFailed, match="failure closeout failed"):
+        core.run_once(tmp_path)
+    state = core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml")
+    assert state.state == "ready"
+    assert state.consecutive_failures == 0
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any("failure session storage unavailable" in error for error in recovery["errors"])
+    runtime = json.loads(next((tmp_path / ".a-exp" / "runs").glob("*.json")).read_text())
+    assert runtime["next_state"] == "recovery_required"
+    assert core.status_json(tmp_path)["health"] == "degraded"
 
 
 def test_real_codex_smoke_refuses_nonempty_workspace(tmp_path: Path) -> None:

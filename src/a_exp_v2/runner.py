@@ -166,6 +166,7 @@ def run_codex(
     thread_id: str | None,
     append: bool = False,
     terminate_grace_seconds: float = 60,
+    external_signal_grace_seconds: float = 55,
 ) -> CodexRunResult:
     command = build_codex_command(
         prompt=prompt,
@@ -255,7 +256,9 @@ def run_codex(
             received_signals.append(signum)
             forwarded = signum if len(received_signals) == 1 else signal.SIGKILL
             if len(received_signals) == 1:
-                signal_kill_deadline = time.monotonic() + max(0.01, terminate_grace_seconds)
+                signal_kill_deadline = time.monotonic() + max(
+                    0.01, external_signal_grace_seconds
+                )
             try:
                 os.killpg(process.pid, forwarded)
             except ProcessLookupError:

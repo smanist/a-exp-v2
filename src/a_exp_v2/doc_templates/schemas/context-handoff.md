@@ -12,9 +12,6 @@ latest_handoff: null
 Use `handoffs/.gitkeep` so the revision-0 directory survives Git clones; it is
 not a handoff record and may remain after activation.
 
-Use `handoffs/.gitkeep` so the revision-0 directory survives Git clones; it is
-not a handoff record and may remain after activation.
-
 Revision 0 is permitted only while shaping. A ready study requires revision 1
 or later and a valid latest handoff. Handoff IDs are safe single-component IDs;
 `latest_handoff` stores the ID without `.yaml`.
@@ -65,5 +62,6 @@ and sessions, which outrank thread memory.
 `source_commit` identifies the clean interactive evidence/memory commit on
 which the handoff was based; it does not identify the later commit that adds
 the handoff itself. `based_on_run_id` is the last autonomous run actually
-observed during interactive reconciliation. `source_thread_id` is optional
-provenance and never replaces repository memory.
+observed during interactive reconciliation; when present, it must name a
+committed session from an earlier context revision. `source_thread_id` is
+optional provenance and never replaces repository memory.

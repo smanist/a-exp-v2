@@ -458,13 +458,46 @@ def git_clean(root: Path) -> bool:
     return not git_status_paths(root)
 
 
+def runtime_control_hashes(root: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    paths: list[Path] = [root / CONFIG_PATH, root / ".a-exp/kit.lock.yaml"]
+    for relative in (THREADS_DIR, RUNNING_DIR, RECOVERY_DIR):
+        directory = root / relative
+        if not os.path.lexists(directory):
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            paths.append(directory)
+            continue
+        try:
+            paths.extend(sorted(directory.rglob("*")))
+        except OSError as exc:
+            values[relative.as_posix()] = f"scan-error:{exc}"
+    for path in paths:
+        if not os.path.lexists(path):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            try:
+                target = os.readlink(path)
+            except OSError as exc:
+                target = f"unreadable:{exc}"
+            values[relative] = f"symlink:{target}"
+        elif path.is_file():
+            try:
+                values[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                values[relative] = f"unreadable:{exc}"
+    return values
+
+
 def git_changed_paths_since(root: Path, base_commit: str) -> list[str]:
     result = subprocess.run(
         [
             "git",
             "-C",
             str(root),
-            "diff",
+            "log",
+            "--format=",
             "--name-only",
             "--no-renames",
             "-z",
@@ -475,11 +508,25 @@ def git_changed_paths_since(root: Path, base_commit: str) -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        raise WorkspaceError(result.stderr.strip() or "git diff failed")
+        raise WorkspaceError(result.stderr.strip() or "git history inspection failed")
     return sorted(
         {value for value in result.stdout.split("\0") if value}
         | set(git_status_paths(root))
     )
+
+
+def git_head_descends_from(root: Path, base_commit: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", base_commit, "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise WorkspaceError(result.stderr.strip() or "Git ancestry inspection failed")
 
 
 def git_commits_since(root: Path, base_commit: str) -> list[str]:
@@ -650,7 +697,7 @@ context and set `state: ready`.
 
 Autonomous GPU experiments declare `producer: autonomous`. During autonomous
 work do not edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`, `handoffs/`,
-`STATE.yaml`, or `sessions/`.
+`STATE.yaml`, or `sessions/`, and do not edit files under another study.
 
 For experiment-heavy work, check `protocols/registry.yaml`, follow any matching
 playbook and checklist, and record the protocol id in experiment memory.
@@ -1118,10 +1165,66 @@ def experiment_producer(path: Path) -> str:
         raise ValueError(f"invalid EXPERIMENT.md frontmatter: {exc}") from exc
     if not isinstance(frontmatter, dict):
         raise ValueError("EXPERIMENT.md frontmatter must be an object")
+    if frontmatter.get("id") != path.parent.name:
+        raise ValueError("EXPERIMENT.md frontmatter id must match its directory")
+    if len(path.parents) < 3 or frontmatter.get("study") != path.parents[2].name:
+        raise ValueError("EXPERIMENT.md frontmatter study must match its study directory")
     producer = frontmatter.get("producer")
     if producer not in EXPERIMENT_PRODUCERS:
         raise ValueError("EXPERIMENT.md frontmatter producer must be interactive or autonomous")
     return producer
+
+
+def validate_session_handoff_links(
+    records: list[dict[str, Any]],
+    handoffs: list[Handoff],
+) -> None:
+    by_revision = {handoff.context_revision: handoff for handoff in handoffs}
+    by_run_id = {record.get("run_id"): record for record in records}
+    for handoff in handoffs:
+        if handoff.based_on_run_id is None:
+            continue
+        based_on = by_run_id.get(handoff.based_on_run_id)
+        if based_on is None:
+            raise ValueError(
+                f"handoff {handoff.handoff_id!r} based_on_run_id does not exist"
+            )
+        if based_on.get("context_revision", handoff.context_revision) >= handoff.context_revision:
+            raise ValueError(
+                f"handoff {handoff.handoff_id!r} must be based on an earlier context revision"
+            )
+    for record in records:
+        run_id = str(record.get("run_id", "unknown"))
+        revision = record.get("context_revision")
+        handoff = by_revision.get(revision)
+        if handoff is None:
+            raise ValueError(
+                f"session {run_id!r} references unknown context revision {revision!r}"
+            )
+        if record.get("handoff_id") != handoff.handoff_id:
+            raise ValueError(
+                f"session {run_id!r} handoff_id does not match context revision {revision}"
+            )
+        if record.get("requested_thread_policy") != handoff.thread_policy:
+            raise ValueError(
+                f"session {run_id!r} requested policy does not match its handoff"
+            )
+        if record.get("goal_sha256") != handoff.goal_sha256:
+            raise ValueError(
+                f"session {run_id!r} goal_sha256 does not match its handoff"
+            )
+        if record.get("steering_sha256") != handoff.steering_sha256:
+            raise ValueError(
+                f"session {run_id!r} steering_sha256 does not match its handoff"
+            )
+
+
+def validate_committed_session_record(record: dict[str, Any]) -> None:
+    from .validators import validate_run_record
+
+    errors = validate_run_record(record, committed=True)
+    if errors:
+        raise WorkspaceError("invalid runner-owned session record: " + "; ".join(errors))
 
 
 def write_study_state(path: Path, state: StudyState) -> None:
@@ -1356,6 +1459,7 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
             continue
         required: list[Path] = []
         invalid_reason: str | None = None
+        session_record_values: list[dict[str, Any]] = []
         try:
             required = [
                 study_file_path(root, path, filename)
@@ -1378,6 +1482,12 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                 if os.path.lexists(candidate):
                     directory = study_directory_path(root, path, dirname)
                     if dirname == "sessions":
+                        for entry in directory.iterdir():
+                            if entry.suffix != ".yaml" or entry.is_dir():
+                                raise ValueError(
+                                    "unexpected entry in sessions directory: "
+                                    f"{entry.name}"
+                                )
                         for record_path in directory.glob("*.yaml"):
                             validated_record_path = safe_file(
                                 root,
@@ -1402,12 +1512,23 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                                 )
                             from .validators import validate_run_record
 
-                            record_errors = validate_run_record(record_data)
+                            record_errors = validate_run_record(record_data, committed=True)
                             if record_errors:
                                 raise ValueError(
                                     f"{validated_record_path.relative_to(root)}: "
                                     + "; ".join(record_errors)
                                 )
+                            if record_data.get("study") != name:
+                                raise ValueError(
+                                    f"{validated_record_path.relative_to(root)}: "
+                                    f"study must be {name!r}"
+                                )
+                            if record_data.get("run_id") != validated_record_path.stem:
+                                raise ValueError(
+                                    f"{validated_record_path.relative_to(root)}: "
+                                    "filename must match run_id"
+                                )
+                            session_record_values.append(record_data)
                     else:
                         for pattern in ("*/EXPERIMENT.md", "*/progress.json"):
                             for experiment_path in directory.glob(pattern):
@@ -1424,13 +1545,20 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
             )
             handoff_data: Handoff | None = None
             if valid:
-                handoff_data, _ = load_handoff_chain(root, path, context_data)
+                handoff_data, handoff_chain = load_handoff_chain(root, path, context_data)
+                validate_session_handoff_links(session_record_values, handoff_chain)
                 if context_data.revision == 0 and state_data.state != "shaping":
                     raise ValueError("revision 0 is valid only while state is shaping")
                 if state_data.state == "ready" and context_data.revision < 1:
                     raise ValueError("ready studies require context revision at least 1")
                 experiments_directory = study_directory_path(root, path, "experiments")
-                for experiment_path in sorted(experiments_directory.glob("*/EXPERIMENT.md")):
+                for experiment_path in sorted(experiments_directory.rglob("EXPERIMENT.md")):
+                    if experiment_path.parent.parent != experiments_directory:
+                        relative = experiment_path.relative_to(root)
+                        raise ValueError(
+                            f"{relative}: EXPERIMENT.md must use "
+                            "experiments/<experiment-id>/EXPERIMENT.md"
+                        )
                     try:
                         experiment_producer(experiment_path)
                     except ValueError as exc:
@@ -1580,12 +1708,11 @@ def set_project_enabled(root: Path, project: str, enabled: bool) -> None:
             raise WorkspaceError(f"Project is not a valid study: projects/{project}")
     if not (path / HANDOFFS_DIRNAME).is_dir():
         raise WorkspaceError(f"Project is not a valid study: projects/{project}")
-    try:
-        load_study_state(study_file_path(root, path, "STATE.yaml"))
-        context = load_study_context(study_file_path(root, path, CONTEXT_FILENAME))
-        load_handoff_chain(root, path, context)
-    except ValueError as exc:
-        raise WorkspaceError(f"Project is not a valid study: projects/{project}: {exc}") from exc
+    studies, _ = discover_studies(root)
+    study = next((item for item in studies if item.project == project), None)
+    if study is None or not study.valid:
+        detail = f": {study.invalid_reason}" if study and study.invalid_reason else ""
+        raise WorkspaceError(f"Project is not a valid study: projects/{project}{detail}")
     config_path = runtime_file_path(root, CONFIG_PATH)
     config = load_workspace_config(root)
     item = config.projects.get(project, ProjectConfig())
@@ -1649,15 +1776,7 @@ def status_json(root: Path) -> dict[str, Any]:
         last = last_run_at_from_records(records)
         consumed_revision = consumed_context_revision(records)
         last_record = records[-1] if records else {}
-        superseded_thread_id = next(
-            (
-                record.get("replaced_thread_id")
-                for record in reversed(records)
-                if isinstance(record.get("replaced_thread_id"), str)
-                and record.get("replaced_thread_id")
-            ),
-            None,
-        )
+        superseded_id = superseded_thread_id(records)
         items.append(
             {
                 "id": study.project,
@@ -1683,7 +1802,7 @@ def status_json(root: Path) -> dict[str, Any]:
                     study.handoff_data.thread_policy if study.handoff_data else None
                 ),
                 "last_thread_action": last_record.get("applied_thread_action"),
-                "superseded_thread_id": superseded_thread_id,
+                "superseded_thread_id": superseded_id,
             }
         )
     counts = {state: 0 for state in EFFECTIVE_STATES}
@@ -1828,6 +1947,21 @@ def consumed_context_revision(records: list[dict[str, Any]]) -> int:
         and not isinstance(record.get("context_revision"), bool)
     ]
     return max(revisions, default=0)
+
+
+def superseded_thread_id(records: list[dict[str, Any]]) -> str | None:
+    return next(
+        (
+            str(record["replaced_thread_id"])
+            for record in reversed(records)
+            if record.get("applied_thread_action") in {"replace", "resume_fallback"}
+            and isinstance(record.get("replaced_thread_id"), str)
+            and record.get("replaced_thread_id")
+            and isinstance(record.get("codex_thread_id"), str)
+            and record.get("codex_thread_id") != record.get("replaced_thread_id")
+        ),
+        None,
+    )
 
 
 @contextlib.contextmanager
@@ -2031,6 +2165,7 @@ def workflow_prompt(study: Study, run_id: str) -> str:
         "Advance the study goal within its autonomy envelope. You may implement code and run multiple coherent foreground experiments. Do not launch unmanaged detached processes.",
         "Commit after every material experiment or coherent code change. GPU-produced experiment records must declare `producer: autonomous`.",
         "Do not edit GOAL.md, STEERING.md, CONTEXT.yaml, anything under handoffs/, STATE.yaml, or anything under sessions/. These are interactive- or runner-owned control files.",
+        "Do not edit files under any other projects/<study>/ directory during this selected study run.",
         "Use an explicit packet for separately scoped a-dev work rather than adding scheduler work units.",
         "",
         "Your final response must satisfy the supplied JSON schema. Declare every repo path changed during this run, including paths already committed. Request exactly one next state: ready, needs_human, paused, blocked, or completed.",
@@ -2130,10 +2265,12 @@ def plan_thread_action(
         raise WorkspaceError(
             "machine-local thread mapping is newer than committed CONTEXT.yaml"
         )
-    if (
-        mapped_revision < study.context_data.revision
-        and handoff.thread_policy == "replace"
-    ):
+    root = study.path.parents[1]
+    _, chain = load_handoff_chain(root, study.path, study.context_data)
+    pending_handoffs = [
+        item for item in chain if item.context_revision > mapped_revision
+    ]
+    if any(item.thread_policy == "replace" for item in pending_handoffs):
         return None, "replace", mapped_thread_id
     return mapped_thread_id, "resume", None
 
@@ -2167,6 +2304,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
         assert study.handoff_data is not None
         requested_thread_policy = study.handoff_data.thread_policy
         prompt = workflow_prompt(study, run_id)
+        runtime_before = runtime_control_hashes(root)
     except Exception:
         marker_path.unlink(missing_ok=True)
         raise
@@ -2222,9 +2360,17 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 closeout_error=f"runner exception: {type(exc).__name__}: {exc}",
             )
         assert result is not None
+        runtime_after = runtime_control_hashes(root)
+        runtime_owned_changes = sorted(
+            path
+            for path in set(runtime_before) | set(runtime_after)
+            if runtime_before.get(path) != runtime_after.get(path)
+        )
         thread_id = result.thread_id or run_thread_id or previous_thread_id
         replacement_attempt = thread_action in {"replace", "resume_fallback"}
-        if result.thread_id:
+        if result.thread_id and not (
+            replacement_attempt and result.thread_id == replaced_thread_id
+        ):
             write_thread_record(
                 root,
                 study.project,
@@ -2245,43 +2391,84 @@ def run_once(root: Path) -> dict[str, Any] | None:
             errors.append(result.closeout_error)
         if result.returncode != 0:
             errors.append(f"codex exited {result.returncode}")
+        if result.returncode == 0 and not result.turn_started:
+            errors.append("codex reported success without starting a turn")
+        if thread_action in {"new", "replace", "resume_fallback"} and not result.thread_id:
+            errors.append(f"{thread_action} did not produce a new Codex thread ID")
+        if (
+            replacement_attempt
+            and result.thread_id
+            and result.thread_id == replaced_thread_id
+        ):
+            errors.append(f"{thread_action} returned the superseded Codex thread ID")
+        if runtime_owned_changes:
+            errors.append(
+                "autonomous run modified runner-owned runtime path(s): "
+                + ", ".join(runtime_owned_changes)
+            )
+        history_rewritten = not git_head_descends_from(root, base_commit)
+        if history_rewritten:
+            errors.append("autonomous run rewrote Git history before its claimed base commit")
         actual_paths = set(git_changed_paths_since(root, base_commit))
+        experiment_contract_violated = False
         for changed_path in sorted(actual_paths):
             parts = Path(changed_path).parts
             if (
-                len(parts) == 5
+                len(parts) >= 4
                 and parts[0] == "projects"
-                and parts[1] == study.project
                 and parts[2] == "experiments"
-                and parts[4] == "EXPERIMENT.md"
+                and parts[-1] == "EXPERIMENT.md"
             ):
-                try:
-                    producer = experiment_producer(root / changed_path)
-                except ValueError as exc:
-                    errors.append(f"{changed_path}: {exc}")
+                if len(parts) != 5:
+                    experiment_contract_violated = True
+                    errors.append(
+                        f"{changed_path}: EXPERIMENT.md must use "
+                        "experiments/<experiment-id>/EXPERIMENT.md"
+                    )
                 else:
-                    if producer != "autonomous":
-                        errors.append(
-                            f"autonomous run experiment {changed_path} must declare "
-                            "producer: autonomous"
-                        )
+                    try:
+                        producer = experiment_producer(root / changed_path)
+                    except ValueError as exc:
+                        experiment_contract_violated = True
+                        errors.append(f"{changed_path}: {exc}")
+                    else:
+                        if producer != "autonomous":
+                            experiment_contract_violated = True
+                            errors.append(
+                                f"autonomous run experiment {changed_path} must declare "
+                                "producer: autonomous"
+                            )
         control_filenames = {"GOAL.md", "STEERING.md", CONTEXT_FILENAME, "STATE.yaml"}
-        scheduler_owned_changes = []
+        forbidden_changes = []
         for changed_path in actual_paths:
             parts = Path(changed_path).parts
             forbidden = changed_path.startswith(".a-exp/")
-            if len(parts) >= 3 and parts[0] == "projects" and parts[1] == study.project:
-                forbidden = forbidden or parts[2] in control_filenames
-                forbidden = forbidden or parts[2] in {HANDOFFS_DIRNAME, "sessions"}
+            if len(parts) >= 2 and parts[0] == "projects":
+                forbidden = forbidden or parts[1] != study.project
+                if len(parts) >= 3:
+                    forbidden = forbidden or parts[2] in control_filenames
+                    forbidden = forbidden or parts[2] in {HANDOFFS_DIRNAME, "sessions"}
             if forbidden:
-                scheduler_owned_changes.append(changed_path)
-        scheduler_owned_changes.sort()
-        state_changed = bool(scheduler_owned_changes)
-        if scheduler_owned_changes:
+                forbidden_changes.append(changed_path)
+        forbidden_changes.sort()
+        state_changed = bool(
+            forbidden_changes
+            or runtime_owned_changes
+            or experiment_contract_violated
+            or history_rewritten
+        )
+        if forbidden_changes:
             errors.append(
-                "autonomous run modified scheduler-owned path(s): "
-                + ", ".join(scheduler_owned_changes)
+                "autonomous run modified forbidden path(s): "
+                + ", ".join(forbidden_changes)
             )
+        _, post_run_issues = discover_studies(root)
+        if post_run_issues:
+            errors.append(
+                "autonomous run left an invalid workspace: "
+                + "; ".join(sorted(set(post_run_issues)))
+            )
+            state_changed = True
         declared: set[str] = set()
         if isinstance(result.closeout, dict) and isinstance(result.closeout.get("files_changed"), list):
             for value in result.closeout["files_changed"]:
@@ -2298,6 +2485,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
         undeclared = sorted(actual_paths - declared)
         if undeclared:
             errors.append(f"undeclared changed path(s): {', '.join(undeclared)}")
+            state_changed = True
         if errors:
             failure_record = handle_failed_run_safely(
                 root=root,
@@ -2442,6 +2630,7 @@ def close_successful_run(
         "next_direction": closeout["next_direction"],
         "open_questions": closeout["open_questions"],
     }
+    validate_committed_session_record(session_record)
     atomic_write_text(session_path, yaml.safe_dump(session_record, sort_keys=False))
     write_study_state(state_path, state)
     owned = {
@@ -2616,6 +2805,7 @@ def handle_failed_run(
         "next_direction": state.next_direction,
         "open_questions": state.open_questions,
     }
+    validate_committed_session_record(failure_session)
     runtime.update(
         {
             "summary": failure_session["summary"],

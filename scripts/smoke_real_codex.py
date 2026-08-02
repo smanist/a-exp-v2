@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import tempfile
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ def handoff_record(
     source_commit: str,
     based_on_run_id: str | None,
     interactive_experiments: list[str],
+    interactive_commits: list[str],
     superseded_assumptions: list[str],
 ) -> Any:
     handoff_id = f"r{revision:04d}-smoke"
@@ -61,7 +63,7 @@ def handoff_record(
         open_questions=[],
         relevant_paths=["projects/smoke/GOAL.md"],
         interactive_experiments=interactive_experiments,
-        interactive_commits=[source_commit],
+        interactive_commits=interactive_commits,
         artifacts=[],
         source_thread_id=None,
         path=f"projects/smoke/handoffs/{handoff_id}.yaml",
@@ -178,16 +180,24 @@ def run_handoff_workflow(root: Path, foreground_seconds: float) -> None:
         source_commit=core.git_head(root),
         based_on_run_id=None,
         interactive_experiments=["interactive-baseline"],
+        interactive_commits=[core.git_head(root)],
         superseded_assumptions=[],
     )
     commit_handoff(core, root, study, initial)
 
+    first_started = time.monotonic()
     first = core.run_once(root)
+    first_elapsed = time.monotonic() - first_started
     if first is None or first["context_revision"] != 1 or first["applied_thread_action"] != "new":
         raise RuntimeError(f"initial handoff did not start a new thread: {first!r}")
     first_thread = first["codex_thread_id"]
     if not first_thread or not (study / "revision-1.txt").is_file():
         raise RuntimeError("initial autonomous evidence or thread ID is missing")
+    if first_elapsed + 0.25 < foreground_seconds:
+        raise RuntimeError(
+            f"initial turn returned in {first_elapsed:.2f}s before the requested "
+            "foreground duration"
+        )
 
     continuation = handoff_record(
         core,
@@ -200,6 +210,7 @@ def run_handoff_workflow(root: Path, foreground_seconds: float) -> None:
         source_commit=core.git_head(root),
         based_on_run_id=first["run_id"],
         interactive_experiments=["interactive-baseline"],
+        interactive_commits=[],
         superseded_assumptions=[],
     )
     commit_handoff(core, root, study, continuation)
@@ -233,6 +244,7 @@ def run_handoff_workflow(root: Path, foreground_seconds: float) -> None:
         source_commit=core.git_head(root),
         based_on_run_id=second["run_id"],
         interactive_experiments=["interactive-baseline"],
+        interactive_commits=[core.git_head(root)],
         superseded_assumptions=["The continuation objective remains active"],
     )
     commit_handoff(core, root, study, major)

@@ -170,6 +170,7 @@ def completed_session_data(
     study: str,
     run_id: str,
     *,
+    goal_sha256: str,
     next_state: str = "ready",
     summary: str = "Completed test session",
     artifacts: list[str] | None = None,
@@ -191,6 +192,8 @@ def completed_session_data(
         "requested_thread_policy": "resume",
         "applied_thread_action": "new",
         "context_consumed": True,
+        "goal_sha256": goal_sha256,
+        "steering_sha256": None,
         "summary": summary,
         "experiments": [],
         "verification": [{"command": "pytest", "result": "passed"}],
@@ -347,6 +350,11 @@ def test_status_contract_and_lifecycle_counts(tmp_path: Path) -> None:
 
     data = core.status_json(tmp_path)
     assert validate_status_json(data) == []
+
+    invalid = json.loads(json.dumps(data))
+    invalid["studies"]["items"][0]["consumed_context_revision"] = 2
+    invalid["studies"]["items"][0]["context_pending"] = False
+    assert any("exceeds current revision" in error for error in validate_status_json(invalid))
     assert data["health"] == "ok"
     assert data["work"]["runnable"] == 1
     assert data["studies"]["ready"] == 1
@@ -401,6 +409,22 @@ def test_enable_disable_requires_valid_study_and_commits(tmp_path: Path) -> None
         core.set_project_enabled(tmp_path, "missing", True)
     with pytest.raises(core.WorkspaceError, match="Invalid study ID"):
         core.set_project_enabled(tmp_path, "../outside", True)
+
+
+def test_enable_disable_rejects_full_contract_invalidity(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    experiment = study / "experiments" / "bad" / "EXPERIMENT.md"
+    experiment.parent.mkdir(parents=True)
+    experiment.write_text(
+        "---\nid: bad\nstatus: completed\ndate: 2026-08-02\n"
+        "study: demo\nprotocol: test.v1\n---\n\n# Missing producer\n",
+        encoding="utf-8",
+    )
+    commit_all(tmp_path, "Add invalid experiment")
+
+    with pytest.raises(core.WorkspaceError, match="producer"):
+        core.set_project_enabled(tmp_path, "demo", False)
 
 
 def test_capability_eligibility_and_host_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,7 +547,9 @@ def test_selection_ready_after_priority_last_run_and_id(tmp_path: Path) -> None:
 
     session = tmp_path / "projects" / "alpha" / "sessions" / "old.yaml"
     session.parent.mkdir(parents=True)
-    old_session = completed_session_data("alpha", "old")
+    old_session = completed_session_data(
+        "alpha", "old", goal_sha256=core.content_hash(tmp_path / "projects/alpha/GOAL.md")
+    )
     old_session["started_at"] = "2026-01-01T00:00:00Z"
     session.write_text(yaml.safe_dump(old_session, sort_keys=False), encoding="utf-8")
     commit_all(tmp_path, "Record alpha history")
@@ -696,6 +722,56 @@ def test_resume_failure_before_turn_replaces_thread(tmp_path: Path, monkeypatch:
     assert core.read_thread_id(tmp_path, "demo") == "replacement"
 
 
+def test_new_thread_context_is_not_consumed_without_a_thread_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(successful_closeout(), thread_id=None, turn_started=True),
+    )
+
+    with pytest.raises(core.AgentRunFailed, match="did not produce a new Codex thread ID"):
+        core.run_once(tmp_path)
+    records = core.session_records(tmp_path, "demo")
+    assert len(records) == 1
+    assert records[0]["status"] == "failed"
+    assert records[0]["context_consumed"] is False
+    assert core.read_thread_record(tmp_path, "demo") is None
+
+
+def test_replacement_is_not_consumed_when_codex_returns_the_old_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "thread-old", "old-run", 1)
+    (study / "GOAL.md").write_text("# Goal\n\nReplacement objective.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="major_change",
+        thread_policy="replace",
+        superseded_assumptions=["Original objective controls the work"],
+    )
+    commit_all(tmp_path, "Request replacement")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(successful_closeout(), thread_id="thread-old"),
+    )
+
+    with pytest.raises(core.AgentRunFailed, match="returned the superseded"):
+        core.run_once(tmp_path)
+    mapping = core.read_thread_record(tmp_path, "demo")
+    assert mapping["thread_id"] == "thread-old"
+    assert mapping["context_revision"] == 1
+    record = core.session_records(tmp_path, "demo")[0]
+    assert record["context_consumed"] is False
+
+
 def test_clean_infrastructure_failure_retries_then_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -765,6 +841,43 @@ def test_undeclared_dirty_file_preserves_recovery_and_degrades_health(
     assert core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml").state == "ready"
 
 
+def test_undeclared_committed_file_requires_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        path = tmp_path / "unexpected.txt"
+        path.write_text("committed but undeclared\n", encoding="utf-8")
+        core.commit_workspace_changes(
+            tmp_path, "Commit undeclared change", [path.relative_to(tmp_path)]
+        )
+        return result(successful_closeout(files=[]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="undeclared"):
+        core.run_once(tmp_path)
+    assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
+    assert core.status_json(tmp_path)["health"] == "degraded"
+
+
+def test_autonomous_cannot_rewrite_the_claimed_git_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        git(tmp_path, "commit", "--amend", "-m", "Rewrite claimed base")
+        return result(successful_closeout(files=[]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="rewrote Git history"):
+        core.run_once(tmp_path)
+    assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
+
+
 def test_agent_state_edit_is_unsafe_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     core.init_workspace(tmp_path)
     study = write_study(tmp_path, "demo")
@@ -796,7 +909,7 @@ def test_agent_config_commit_is_detected_as_scheduler_owned(
 
     monkeypatch.setattr(core, "run_codex", fake_run_codex)
 
-    with pytest.raises(core.AgentRunFailed, match="scheduler-owned"):
+    with pytest.raises(core.AgentRunFailed, match="forbidden"):
         core.run_once(tmp_path)
     recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
     assert any(".a-exp/config.yaml" in error for error in recovery["errors"])
@@ -903,6 +1016,7 @@ def test_approvals_experiments_and_kanban(tmp_path: Path) -> None:
             completed_session_data(
                 "demo",
                 "run",
+                goal_sha256=core.content_hash(study / "GOAL.md"),
                 next_state="needs_human",
                 summary="Compared methods",
                 artifacts=["projects/demo/artifacts/plot.png"],
@@ -1169,6 +1283,42 @@ def test_interactive_evidence_is_referenced_and_producer_checked(tmp_path: Path)
     assert any("producer: interactive" in issue for issue in core.discover_studies(tmp_path)[1])
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("id", "other", "id must match"),
+        ("study", "other", "study must match"),
+    ],
+)
+def test_experiment_frontmatter_identity_matches_path(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    record = study / "experiments" / "evidence" / "EXPERIMENT.md"
+    record.parent.mkdir(parents=True)
+    frontmatter = {
+        "id": "evidence",
+        "status": "completed",
+        "date": "2026-08-02",
+        "study": "demo",
+        "protocol": "test.v1",
+        "producer": "interactive",
+    }
+    frontmatter[field] = value
+    record.write_text(
+        "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n# Evidence\n",
+        encoding="utf-8",
+    )
+    commit_all(tmp_path, f"Commit mismatched experiment {field}")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
 def test_legacy_session_schema_is_rejected(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     study = write_study(tmp_path, "demo", state="needs_human")
@@ -1184,12 +1334,83 @@ def test_legacy_session_schema_is_rejected(tmp_path: Path) -> None:
     assert any("schema_version must be 2" in issue for issue in issues)
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("study", "study must be 'demo'"),
+        ("filename", "filename must match run_id"),
+        ("timestamp", "ended_at must not precede started_at"),
+        ("unexpected_entry", "unexpected entry in sessions directory"),
+    ],
+)
+def test_session_record_identity_and_time_are_strict(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
+    sessions = study / "sessions"
+    sessions.mkdir()
+    record = completed_session_data(
+        "demo", "manual", goal_sha256=core.content_hash(study / "GOAL.md")
+    )
+    record_path = sessions / "manual.yaml"
+    if mutation == "study":
+        record["study"] = "other"
+    elif mutation == "filename":
+        record_path = sessions / "other.yaml"
+    elif mutation == "timestamp":
+        record["ended_at"] = "2026-07-31T23:59:00Z"
+    else:
+        (sessions / "notes.txt").write_text("not runner-owned\n", encoding="utf-8")
+    record_path.write_text(yaml.safe_dump(record, sort_keys=False), encoding="utf-8")
+    commit_all(tmp_path, f"Commit malformed session {mutation}")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("unknown", "unknown committed run field"),
+        ("missing", "missing committed run field"),
+    ],
+)
+def test_committed_session_payload_is_strict(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
+    record = completed_session_data(
+        "demo", "manual", goal_sha256=core.content_hash(study / "GOAL.md")
+    )
+    if mutation == "unknown":
+        record["raw_transcript"] = "not durable session data"
+    else:
+        record.pop("verification")
+    sessions = study / "sessions"
+    sessions.mkdir()
+    (sessions / "manual.yaml").write_text(
+        yaml.safe_dump(record, sort_keys=False), encoding="utf-8"
+    )
+    commit_all(tmp_path, f"Commit malformed session payload {mutation}")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
 def test_context_consumption_uses_only_committed_sessions(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     study = write_study(tmp_path, "demo")
     sessions = study / "sessions"
     sessions.mkdir()
-    record = completed_session_data("demo", "manual")
+    record = completed_session_data(
+        "demo", "manual", goal_sha256=core.content_hash(study / "GOAL.md")
+    )
     (sessions / "manual.yaml").write_text(
         yaml.safe_dump(record, sort_keys=False), encoding="utf-8"
     )
@@ -1202,6 +1423,57 @@ def test_context_consumption_uses_only_committed_sessions(tmp_path: Path) -> Non
     item = core.status_json(tmp_path)["studies"]["items"][0]
     assert item["consumed_context_revision"] == 1
     assert item["context_pending"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("context_revision", 2, "unknown context revision"),
+        ("handoff_id", "wrong", "handoff_id does not match"),
+        ("requested_thread_policy", "replace", "requested policy does not match"),
+        ("goal_sha256", "f" * 64, "goal_sha256 does not match"),
+    ],
+)
+def test_session_records_must_match_the_handoff_chain(
+    tmp_path: Path,
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
+    record = completed_session_data(
+        "demo", "manual", goal_sha256=core.content_hash(study / "GOAL.md")
+    )
+    record[field] = value
+    sessions = study / "sessions"
+    sessions.mkdir()
+    (sessions / "manual.yaml").write_text(
+        yaml.safe_dump(record, sort_keys=False), encoding="utf-8"
+    )
+    commit_all(tmp_path, "Commit mismatched session")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
+def test_handoff_based_on_run_must_resolve_to_an_earlier_session(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
+    handoff_id = append_handoff(
+        tmp_path,
+        study,
+        change_class="continuation",
+        thread_policy="resume",
+    )
+    handoff_path = study / "handoffs" / f"{handoff_id}.yaml"
+    handoff = yaml.safe_load(handoff_path.read_text(encoding="utf-8"))
+    handoff["based_on_run_id"] = "missing-run"
+    handoff_path.write_text(yaml.safe_dump(handoff, sort_keys=False), encoding="utf-8")
+    commit_all(tmp_path, "Commit handoff with missing observed run")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any("based_on_run_id does not exist" in issue for issue in issues)
 
 
 def test_stale_ready_requires_a_new_context_revision(
@@ -1334,6 +1606,7 @@ def test_replacement_retries_when_no_new_thread_started(
         core.run_once(tmp_path)
     assert core.read_thread_record(tmp_path, "demo")["thread_id"] == "thread-old"
     assert core.read_thread_record(tmp_path, "demo")["context_revision"] == 1
+    assert core.status_json(tmp_path)["studies"]["items"][0]["superseded_thread_id"] is None
     failed_state = core.load_study_state(study / "STATE.yaml")
     core.write_study_state(study / "STATE.yaml", replace(failed_state, ready_after=None))
     commit_all(tmp_path, "Make replacement retry due")
@@ -1343,6 +1616,42 @@ def test_replacement_retries_when_no_new_thread_started(
     assert completed["applied_thread_action"] == "replace"
     assert completed["replaced_thread_id"] == "thread-old"
     assert core.read_thread_record(tmp_path, "demo")["thread_id"] == "thread-new"
+
+
+def test_pending_major_change_is_not_skipped_by_later_continuation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "thread-old", "old-run", 1)
+    (study / "GOAL.md").write_text("# Goal\n\nReplacement objective.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="major_change",
+        thread_policy="replace",
+        superseded_assumptions=["Original objective controls the work"],
+    )
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="continuation",
+        thread_policy="resume",
+    )
+    commit_all(tmp_path, "Queue continuation after unconsumed major change")
+    calls: list[str | None] = []
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        calls.append(kwargs["thread_id"])
+        return result(successful_closeout(next_state="completed"), thread_id="thread-new")
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    completed = core.run_once(tmp_path)
+    assert calls == [None]
+    assert completed["requested_thread_policy"] == "resume"
+    assert completed["applied_thread_action"] == "replace"
+    assert completed["replaced_thread_id"] == "thread-old"
+    assert core.read_thread_record(tmp_path, "demo")["context_revision"] == 3
 
 
 @pytest.mark.parametrize(
@@ -1369,8 +1678,93 @@ def test_autonomous_control_file_edits_are_forbidden(
         return result(successful_closeout(files=[relative_path]))
 
     monkeypatch.setattr(core, "run_codex", fake_run_codex)
-    with pytest.raises(core.AgentRunFailed, match="scheduler-owned"):
+    with pytest.raises(core.AgentRunFailed, match="forbidden"):
         core.run_once(tmp_path)
+
+
+@pytest.mark.parametrize("other_path", ["GOAL.md", "PLAN.md"])
+def test_autonomous_cannot_edit_another_study(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_path: str
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "active")
+    other = write_study(tmp_path, "other")
+    config = load_config(tmp_path / ".a-exp" / "config.yaml")
+    config.projects["active"] = ProjectConfig(priority=1)
+    config.projects["other"] = ProjectConfig(priority=2)
+    dump_config(config, tmp_path / ".a-exp" / "config.yaml")
+    commit_all(tmp_path, "Select active study first")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        (other / other_path).write_text("# Illicit cross-study edit\n", encoding="utf-8")
+        return result(successful_closeout(files=[f"projects/other/{other_path}"]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match=f"projects/other/{other_path}"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any(f"projects/other/{other_path}" in error for error in recovery["errors"])
+
+
+def test_autonomous_cannot_hide_control_edit_in_reverted_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    goal = study / "GOAL.md"
+    original_goal = goal.read_text(encoding="utf-8")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        goal.write_text("# Illicit transient goal\n", encoding="utf-8")
+        core.commit_workspace_changes(
+            tmp_path, "Illicit autonomous goal edit", [goal.relative_to(tmp_path)]
+        )
+        goal.write_text(original_goal, encoding="utf-8")
+        core.commit_workspace_changes(
+            tmp_path, "Hide autonomous goal edit", [goal.relative_to(tmp_path)]
+        )
+        return result(successful_closeout(files=["projects/demo/GOAL.md"]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="projects/demo/GOAL.md"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any("projects/demo/GOAL.md" in error for error in recovery["errors"])
+
+
+def test_autonomous_closeout_rejects_a_newly_invalid_study(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        (study / "README.md").unlink()
+        return result(successful_closeout(files=["projects/demo/README.md"]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="invalid workspace"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any("Missing projects/demo/README.md" in error for error in recovery["errors"])
+
+
+def test_autonomous_cannot_modify_ignored_thread_mappings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    other_mapping = tmp_path / ".a-exp" / "threads" / "other.json"
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        other_mapping.write_text('{"thread_id": "hijacked"}\n', encoding="utf-8")
+        return result(successful_closeout(next_state="completed"))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="runner-owned runtime"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any(".a-exp/threads/other.json" in error for error in recovery["errors"])
 
 
 @pytest.mark.parametrize("producer", ["interactive", "missing"])
@@ -1401,6 +1795,7 @@ def test_autonomous_experiment_requires_autonomous_producer(
     monkeypatch.setattr(core, "run_codex", fake_run_codex)
     with pytest.raises(core.AgentRunFailed, match="producer"):
         core.run_once(tmp_path)
+    assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
 
 
 def test_autonomous_experiment_accepts_autonomous_producer(
@@ -1430,6 +1825,32 @@ def test_autonomous_experiment_accepts_autonomous_producer(
     completed = core.run_once(tmp_path)
     assert completed["next_state"] == "completed"
     assert core.status_json(tmp_path)["health"] == "ok"
+
+
+def test_autonomous_experiment_requires_canonical_record_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        record = study / "experiments" / "gpu-exp" / "nested" / "EXPERIMENT.md"
+        record.parent.mkdir(parents=True)
+        record.write_text(
+            "---\nid: nested\nstatus: completed\ndate: 2026-08-02\n"
+            "study: demo\nprotocol: test.v1\nproducer: autonomous\n---\n",
+            encoding="utf-8",
+        )
+        return result(
+            successful_closeout(
+                files=["projects/demo/experiments/gpu-exp/nested/EXPERIMENT.md"],
+                experiments=["gpu-exp"],
+            )
+        )
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="experiments/<experiment-id>"):
+        core.run_once(tmp_path)
 
 
 def test_packaged_handoff_skills_have_ui_invocation_policy(tmp_path: Path) -> None:

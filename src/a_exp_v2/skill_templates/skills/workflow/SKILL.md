@@ -27,7 +27,8 @@ Every GPU-produced experiment must declare `producer: autonomous` and record
 its context revision. Commit after each material experiment or coherent code
 change. Never edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`, `handoffs/`,
 `STATE.yaml`, or `sessions/`; interactive skills and the runner own those
-control paths.
+control paths. Do not edit files under another study's `projects/<study>/`
+directory.
 
 ## Finish
 

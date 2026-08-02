@@ -50,7 +50,8 @@ may implement code and run multiple foreground experiments. It must not edit
 transition and session record.
 
 Autonomous turns must not edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`,
-`handoffs/`, `STATE.yaml`, or `sessions/`.
+`handoffs/`, `STATE.yaml`, or `sessions/`, and must not edit files under another
+study.
 
 For experiment-heavy work, consult `protocols/registry.yaml` and any applicable
 playbook, template, and checklist.

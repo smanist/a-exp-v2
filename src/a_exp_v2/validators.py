@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -20,10 +22,67 @@ STUDY_STATES = {
 RUN_STATUSES = {"completed", "failed"}
 THREAD_POLICIES = {"resume", "replace"}
 THREAD_ACTIONS = {"new", "resume", "replace", "resume_fallback"}
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+RUN_OUTCOME_NEXT_STATE = {
+    "progress": "ready",
+    "needs_human": "needs_human",
+    "paused": "paused",
+    "blocked": "blocked",
+    "completed": "completed",
+    "infrastructure_failed": None,
+}
+RUN_CONTENT_FIELDS = {
+    "outcome",
+    "summary",
+    "experiments",
+    "verification",
+    "files_changed",
+    "artifacts",
+    "budget_used",
+    "commits",
+    "next_direction",
+    "open_questions",
+}
+COMMITTED_RUN_FIELDS = {
+    "schema_version",
+    "run_id",
+    "study",
+    "status",
+    "previous_state",
+    "next_state",
+    "started_at",
+    "ended_at",
+    "codex_thread_id",
+    "replaced_thread_id",
+    "context_revision",
+    "handoff_id",
+    "requested_thread_policy",
+    "applied_thread_action",
+    "context_consumed",
+    "goal_sha256",
+    "steering_sha256",
+    *RUN_CONTENT_FIELDS,
+    "errors",
+}
 
 
 def _non_negative_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def validate_status_json(data: dict[str, Any]) -> list[str]:
@@ -138,6 +197,10 @@ def validate_status_json(data: dict[str, Any]) -> list[str]:
         revision = item.get("context_revision")
         consumed = item.get("consumed_context_revision")
         if _non_negative_int(revision) and _non_negative_int(consumed):
+            if consumed > revision:
+                errors.append(
+                    f"studies.items[{index}].consumed_context_revision exceeds current revision"
+                )
             if item.get("context_pending") != (revision > consumed):
                 errors.append(f"studies.items[{index}].context_pending is inconsistent")
         latest_handoff = item.get("latest_handoff")
@@ -172,7 +235,11 @@ def validate_status_json(data: dict[str, Any]) -> list[str]:
     return errors
 
 
-def validate_run_record(data: dict[str, Any]) -> list[str]:
+def validate_run_record(
+    data: dict[str, Any],
+    *,
+    committed: bool = False,
+) -> list[str]:
     errors: list[str] = []
     required = [
         "schema_version",
@@ -190,6 +257,8 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         "requested_thread_policy",
         "applied_thread_action",
         "context_consumed",
+        "goal_sha256",
+        "steering_sha256",
     ]
     for key in required:
         if key not in data:
@@ -198,25 +267,24 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         errors.append("schema_version must be 2")
     if data.get("status") not in RUN_STATUSES:
         errors.append("status must be completed or failed")
+    if committed:
+        unknown = sorted(set(data) - COMMITTED_RUN_FIELDS)
+        if unknown:
+            errors.append(f"unknown committed run field(s): {', '.join(unknown)}")
+        for key in sorted(RUN_CONTENT_FIELDS):
+            if key not in data:
+                errors.append(f"missing committed run field: {key}")
     if data.get("status") == "completed":
-        for key in [
-            "outcome",
-            "summary",
-            "experiments",
-            "verification",
-            "files_changed",
-            "artifacts",
-            "budget_used",
-            "commits",
-            "next_direction",
-            "open_questions",
-        ]:
+        for key in sorted(RUN_CONTENT_FIELDS):
             if key not in data:
                 errors.append(f"missing completed run field: {key}")
         if data.get("context_consumed") is not True:
             errors.append("completed runs must consume context")
-    elif data.get("context_consumed") is not False:
-        errors.append("failed runs must not consume context")
+    elif data.get("status") == "failed":
+        if data.get("context_consumed") is not False:
+            errors.append("failed runs must not consume context")
+        if committed and "errors" not in data:
+            errors.append("missing committed failed run field: errors")
     if not _non_negative_int(data.get("context_revision")) or data.get(
         "context_revision"
     ) < 1:
@@ -227,6 +295,102 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         errors.append("requested_thread_policy must be resume or replace")
     if data.get("applied_thread_action") not in THREAD_ACTIONS:
         errors.append("applied_thread_action is invalid")
+    for key in ("run_id", "study", "previous_state", "next_state"):
+        if not isinstance(data.get(key), str) or not data.get(key):
+            errors.append(f"{key} must be a non-empty string")
+    for key in ("codex_thread_id", "replaced_thread_id"):
+        value = data.get(key)
+        if value is not None and (not isinstance(value, str) or not value):
+            errors.append(f"{key} must be a non-empty string or null")
+    goal_sha256 = data.get("goal_sha256")
+    if not isinstance(goal_sha256, str) or not SHA256_PATTERN.fullmatch(goal_sha256):
+        errors.append("goal_sha256 must be a lowercase SHA-256 digest")
+    steering_sha256 = data.get("steering_sha256")
+    if steering_sha256 is not None and (
+        not isinstance(steering_sha256, str)
+        or not SHA256_PATTERN.fullmatch(steering_sha256)
+    ):
+        errors.append("steering_sha256 must be a lowercase SHA-256 digest or null")
+    action = data.get("applied_thread_action")
+    codex_thread_id = data.get("codex_thread_id")
+    replaced_thread_id = data.get("replaced_thread_id")
+    if action in {"replace", "resume_fallback"} and not (
+        isinstance(replaced_thread_id, str) and replaced_thread_id
+    ):
+        errors.append(f"{action} requires replaced_thread_id")
+    if action in {"new", "resume"} and replaced_thread_id is not None:
+        errors.append(f"{action} requires replaced_thread_id to be null")
+    if data.get("status") == "completed" and not (
+        isinstance(codex_thread_id, str) and codex_thread_id
+    ):
+        errors.append("completed runs require codex_thread_id")
+    if (
+        data.get("status") == "completed"
+        and action in {"replace", "resume_fallback"}
+        and codex_thread_id == replaced_thread_id
+    ):
+        errors.append(f"completed {action} must use a new codex_thread_id")
+    started_at = _timestamp(data.get("started_at"))
+    ended_at = _timestamp(data.get("ended_at"))
+    if started_at is None:
+        errors.append("started_at must be an ISO timestamp")
+    if ended_at is None:
+        errors.append("ended_at must be an ISO timestamp")
+    if started_at is not None and ended_at is not None and ended_at < started_at:
+        errors.append("ended_at must not precede started_at")
+    outcome = data.get("outcome")
+    if outcome is not None and outcome not in RUN_OUTCOME_NEXT_STATE:
+        errors.append("outcome is invalid")
+    elif outcome in RUN_OUTCOME_NEXT_STATE:
+        expected_state = RUN_OUTCOME_NEXT_STATE[outcome]
+        if expected_state is not None and data.get("next_state") != expected_state:
+            errors.append(f"outcome {outcome} requires next_state {expected_state}")
+        if outcome == "infrastructure_failed" and data.get("status") != "failed":
+            errors.append("infrastructure_failed outcome requires failed status")
+    for key in ("experiments", "files_changed", "artifacts", "commits", "open_questions"):
+        value = data.get(key)
+        if value is not None and (
+            not isinstance(value, list) or any(not isinstance(item, str) for item in value)
+        ):
+            errors.append(f"{key} must be a list of strings")
+    verification = data.get("verification")
+    if verification is not None and (
+        not isinstance(verification, list)
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("command"), str)
+            or not item.get("command", "").strip()
+            or not isinstance(item.get("result"), str)
+            or not item.get("result", "").strip()
+            for item in verification
+        )
+    ):
+        errors.append("verification must contain command/result objects")
+    elif data.get("status") == "completed" and not verification:
+        errors.append("completed run verification must not be empty")
+    if "summary" in data and (
+        not isinstance(data.get("summary"), str) or not data.get("summary", "").strip()
+    ):
+        errors.append("summary must be a non-empty string")
+    if "budget_used" in data and not isinstance(data.get("budget_used"), dict):
+        errors.append("budget_used must be an object")
+    elif data.get("status") == "completed" and isinstance(data.get("budget_used"), dict):
+        budget = data["budget_used"]
+        wall = budget.get("wall_seconds")
+        experiment_count = budget.get("experiments")
+        if isinstance(wall, bool) or not isinstance(wall, (int, float)) or wall < 0:
+            errors.append("budget_used.wall_seconds must be non-negative")
+        if not _non_negative_int(experiment_count):
+            errors.append("budget_used.experiments must be a non-negative integer")
+    if data.get("next_direction") is not None and not isinstance(
+        data.get("next_direction"), str
+    ):
+        errors.append("next_direction must be a string or null")
+    if "errors" in data and (
+        not isinstance(data.get("errors"), list)
+        or any(not isinstance(item, str) or not item for item in data.get("errors", []))
+    ):
+        errors.append("errors must be a list of non-empty strings")
     closeout = data.get("closeout_validation")
     if closeout is not None:
         if not isinstance(closeout, dict):

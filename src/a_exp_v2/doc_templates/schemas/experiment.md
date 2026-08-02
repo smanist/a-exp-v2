@@ -36,3 +36,6 @@ need not be committed. A session may update
 `progress.json` while a foreground experiment runs; active values are
 `running`, `retrying`, and `stopping`. No process represented there may outlive
 the owning Codex turn in this revision.
+
+The record must use the canonical path above. Its frontmatter `id` must match
+the experiment directory and `study` must match the containing study.

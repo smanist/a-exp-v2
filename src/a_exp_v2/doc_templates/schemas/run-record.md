@@ -15,6 +15,13 @@ commits, next direction, and open questions. It also records
 Infrastructure failures with a safe worktree also receive a committed failure
 session with `context_consumed: false`.
 
+The YAML filename must match `run_id`, `study` must match the containing study,
+and the start/end timestamps must be valid and ordered. The handoff ID, policy,
+and goal/steering hashes must match the referenced context revision. No other
+files belong in `sessions/`. A completed run always has a Codex thread ID; a
+completed replacement must identify a different thread from the superseded
+one.
+
 Ignored machine-local runtime provenance:
 
 ```text

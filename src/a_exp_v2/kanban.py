@@ -56,7 +56,7 @@ def recent_run_summaries(records: list[dict[str, Any]], limit: int = 8) -> list[
 
 def generate_study(root: Path, study: Any) -> str:
     state = study.state_data
-    records = session_records(root, study.project)
+    records = session_records(root, study.project) if study.valid else []
     lines = [
         f"# Study: {study.project}",
         "",
@@ -79,7 +79,8 @@ def generate_study(root: Path, study: Any) -> str:
     lines.extend([""])
     lines.extend(bullets("Recent Sessions", recent_run_summaries(records), "no sessions recorded"))
     lines.extend([""])
-    lines.extend(bullets("Experiments and Findings", experiment_summaries(study.path), "no experiment records"))
+    experiments = experiment_summaries(study.path) if study.valid else []
+    lines.extend(bullets("Experiments and Findings", experiments, "no experiment records"))
     lines.extend([""])
     lines.extend(bullets("Artifacts", artifact_summaries(records), "no declared artifacts"))
     return "\n".join(lines).rstrip() + "\n"

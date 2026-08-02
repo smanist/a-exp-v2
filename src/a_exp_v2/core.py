@@ -30,6 +30,7 @@ from .config import (
     WorkspaceConfig,
     dump_config,
     load_config,
+    validate_project_id,
 )
 from .runner import CodexRunResult, run_codex, summarize_events
 
@@ -595,6 +596,10 @@ def load_study_state(path: Path) -> StudyState:
         raise ValueError(f"state must be one of: {', '.join(sorted(DURABLE_STATES))}")
     ready_after = raw.get("ready_after")
     if ready_after is not None:
+        if isinstance(ready_after, datetime):
+            if ready_after.tzinfo is None:
+                ready_after = ready_after.replace(tzinfo=timezone.utc)
+            ready_after = ready_after.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         if not isinstance(ready_after, str) or not ready_after.strip():
             raise ValueError("ready_after must be an ISO timestamp or null")
         if not timestamp_due(ready_after, now=datetime.max.replace(tzinfo=timezone.utc)):
@@ -678,19 +683,72 @@ def project_value(config: WorkspaceConfig, project: ProjectConfig, key: str, def
     return config.defaults.get(key, default)
 
 
+def contained_path(root: Path, path: Path, description: str) -> Path:
+    workspace = root.resolve()
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise WorkspaceError(f"{description} escapes workspace: {path}") from exc
+    return path
+
+
+def study_path(root: Path, project: str) -> Path:
+    try:
+        name = validate_project_id(project)
+    except ValueError as exc:
+        raise WorkspaceError(f"Invalid study ID {project!r}: {exc}") from exc
+    projects_root = contained_path(root, root / "projects", "projects directory")
+    path = projects_root / name
+    contained_path(root, path, f"study {name!r}")
+    return path
+
+
 def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
     config = load_workspace_config(root)
     active, marker_issues = reconcile_running_markers(root)
     capabilities = load_host_capabilities()
     projects_root = root / "projects"
+    try:
+        contained_path(root, projects_root, "projects directory")
+    except WorkspaceError as exc:
+        return [], sorted({*marker_issues, str(exc)})
     names = set(config.projects)
     if projects_root.is_dir():
         names.update(path.name for path in projects_root.iterdir() if path.is_dir())
     studies: list[Study] = []
     issues = list(marker_issues)
+    for project in sorted(set(active) - names):
+        issues.append(f"Active marker references unknown study: {project}")
     for name in sorted(names):
         path = projects_root / name
         project_config = config.projects.get(name, ProjectConfig())
+        try:
+            path = study_path(root, name)
+        except WorkspaceError as exc:
+            invalid_reason = str(exc)
+            issues.append(invalid_reason)
+            studies.append(
+                Study(
+                    project=name,
+                    path=path,
+                    state_data=default_invalid_state(),
+                    enabled=project_config.enabled is not False,
+                    priority=project_config.priority,
+                    model=None,
+                    max_run_duration_ms=DEFAULT_MAX_RUN_DURATION_MS,
+                    cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
+                    retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
+                    sandbox=DEFAULT_SANDBOX,
+                    approval_policy=DEFAULT_APPROVAL_POLICY,
+                    eligible=False,
+                    ineligible_reason=None,
+                    valid=False,
+                    invalid_reason=invalid_reason,
+                    active_run_id=None,
+                )
+            )
+            continue
         required = [path / "README.md", path / "GOAL.md", path / "STATE.yaml"]
         missing = [str(item.relative_to(root)) for item in required if not item.is_file()]
         valid = not missing
@@ -771,12 +829,12 @@ def default_invalid_state() -> StudyState:
 
 
 def set_project_enabled(root: Path, project: str, enabled: bool) -> None:
-    study_path = root / "projects" / project
+    path = study_path(root, project)
     for filename in ("README.md", "GOAL.md", "STATE.yaml"):
-        if not (study_path / filename).is_file():
+        if not (path / filename).is_file():
             raise WorkspaceError(f"Project is not a valid study: projects/{project}")
     try:
-        load_study_state(study_path / "STATE.yaml")
+        load_study_state(path / "STATE.yaml")
     except ValueError as exc:
         raise WorkspaceError(f"Project is not a valid study: projects/{project}: {exc}") from exc
     config_path = root / CONFIG_PATH
@@ -802,9 +860,18 @@ def pending_approvals(root: Path) -> int:
     return sum(1 for line in body.splitlines() if line.strip().startswith("- [ ]"))
 
 
-def running_experiments(root: Path) -> int:
+def running_experiments(root: Path, studies: list[Study] | None = None) -> int:
     count = 0
-    for path in sorted((root / "projects").glob("*/experiments/*/progress.json")):
+    valid_studies = studies
+    if valid_studies is None:
+        valid_studies, _ = discover_studies(root)
+    paths = (
+        path
+        for study in valid_studies
+        if study.valid
+        for path in sorted((study.path / "experiments").glob("*/progress.json"))
+    )
+    for path in paths:
         try:
             status = json.loads(path.read_text(encoding="utf-8")).get("status")
         except (OSError, json.JSONDecodeError):
@@ -822,7 +889,7 @@ def status_json(root: Path) -> dict[str, Any]:
         issues.append("Workspace has uncommitted changes")
     items: list[dict[str, Any]] = []
     for study in studies:
-        last = last_run_at(root, study.project)
+        last = last_run_at(root, study.project) if study.valid else None
         items.append(
             {
                 "id": study.project,
@@ -838,7 +905,7 @@ def status_json(root: Path) -> dict[str, Any]:
                 "ineligible_reason": study.ineligible_reason,
                 "ready_after": study.state_data.ready_after,
                 "last_run_at": last,
-                "run_count": run_count(root, study.project),
+                "run_count": run_count(root, study.project) if study.valid else 0,
                 "consecutive_failures": study.state_data.consecutive_failures,
             }
         )
@@ -851,7 +918,7 @@ def status_json(root: Path) -> dict[str, Any]:
         "health": health,
         "warnings": sorted(set(issues)),
         "sessions": {"active": active_count},
-        "experiments": {"running": running_experiments(root)},
+        "experiments": {"running": running_experiments(root, studies)},
         "approvals": {"pending": pending_approvals(root)},
         "work": {"runnable": runnable},
         "studies": {
@@ -924,7 +991,8 @@ def run_count(root: Path, project: str) -> int:
 
 def session_records(root: Path, project: str) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
-    for path in sorted((root / "projects" / project / "sessions").glob("*.yaml")):
+    path = study_path(root, project)
+    for path in sorted((path / "sessions").glob("*.yaml")):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError):
@@ -969,6 +1037,11 @@ def reconcile_running_markers(root: Path) -> tuple[dict[str, str], list[str]]:
         pid = data.get("pid")
         if not isinstance(project, str) or not isinstance(pid, int):
             issues.append(f"Invalid running marker: {path.relative_to(root)}")
+            continue
+        try:
+            validate_project_id(project)
+        except ValueError:
+            issues.append(f"Invalid running marker study ID: {path.relative_to(root)}")
             continue
         if not _pid_alive(pid):
             if git_clean(root):
@@ -1044,7 +1117,12 @@ def claim_next_study(root: Path) -> tuple[Study, str, Path, str] | None:
 
 
 def thread_record_path(root: Path, project: str) -> Path:
-    return root / THREADS_DIR / f"{project}.json"
+    try:
+        name = validate_project_id(project)
+    except ValueError as exc:
+        raise WorkspaceError(f"Invalid study ID {project!r}: {exc}") from exc
+    directory = contained_path(root, root / THREADS_DIR, "thread-record directory")
+    return contained_path(root, directory / f"{name}.json", f"thread record for {name!r}")
 
 
 def read_thread_id(root: Path, project: str) -> str | None:
@@ -1228,13 +1306,12 @@ def run_once(root: Path) -> dict[str, Any] | None:
             errors.append(result.closeout_error)
         if result.returncode != 0:
             errors.append(f"codex exited {result.returncode}")
-        actual_paths = {
-            path for path in git_changed_paths_since(root, base_commit) if not path.startswith(".a-exp/")
-        }
+        actual_paths = set(git_changed_paths_since(root, base_commit))
         scheduler_owned_changes = sorted(
             path
             for path in actual_paths
-            if (
+            if path.startswith(".a-exp/")
+            or (
                 len(Path(path).parts) == 3
                 and Path(path).parts[0] == "projects"
                 and Path(path).name == "STATE.yaml"
@@ -1307,7 +1384,8 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 log_path=log_path,
                 brief_log_path=brief_log_path,
             )
-        except AExpError as exc:
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
             failure_record = handle_failed_run(
                 root=root,
                 study=study,
@@ -1319,7 +1397,7 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 replaced_thread_id=replaced_thread_id,
                 goal_hash=goal_hash,
                 steering_hash=steering_hash,
-                errors=[f"closeout failure: {exc}"],
+                errors=[f"closeout failure: {detail}"],
                 unsafe=True,
                 run_path=run_path,
                 log_path=log_path,

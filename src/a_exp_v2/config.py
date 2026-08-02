@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ DEFAULT_KEYS = {
     "approval_policy",
 }
 PROJECT_KEYS = {"enabled", "priority", *DEFAULT_KEYS}
+PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass
@@ -45,6 +47,15 @@ class WorkspaceConfig:
     layout_version: int = LAYOUT_VERSION
     defaults: dict[str, Any] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
+
+
+def validate_project_id(value: Any) -> str:
+    if not isinstance(value, str) or not PROJECT_ID_PATTERN.fullmatch(value):
+        raise ValueError(
+            "study ID must start with an ASCII letter or digit and contain only "
+            "ASCII letters, digits, '.', '_', or '-'"
+        )
+    return value
 
 
 def _optional_int(value: Any, field_name: str) -> int | None:
@@ -138,10 +149,10 @@ def load_config(path: Path) -> WorkspaceConfig:
     projects_raw = raw.get("projects", {})
     if not isinstance(projects_raw, dict):
         raise ValueError("projects must be an object")
-    projects = {
-        str(name): _as_project_config(str(name), value)
-        for name, value in projects_raw.items()
-    }
+    projects: dict[str, ProjectConfig] = {}
+    for raw_name, value in projects_raw.items():
+        name = validate_project_id(raw_name)
+        projects[name] = _as_project_config(name, value)
     validate_defaults(defaults)
     return WorkspaceConfig(
         layout_version=layout_version,
@@ -204,6 +215,7 @@ def dump_config(config: WorkspaceConfig, path: Path) -> None:
         "projects": {},
     }
     for project in sorted(config.projects):
+        validate_project_id(project)
         item = config.projects[project]
         value: dict[str, Any] = {"priority": item.priority}
         for key in (

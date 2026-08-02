@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -143,3 +146,49 @@ def test_run_codex_timeout_terminates_process_group(tmp_path: Path, monkeypatch:
     assert result.timed_out is True
     assert time.monotonic() - started < 5
     assert result.closeout_error == "missing final response"
+
+
+def test_external_signal_force_kills_codex_group_after_grace(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pid_path = tmp_path / "codex.pid"
+    fake_codex = bin_dir / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    schema = tmp_path / "schema.json"
+    schema.write_text("{}\n", encoding="utf-8")
+    wrapper = (
+        "from pathlib import Path\n"
+        "from a_exp_v2.runner import run_codex\n"
+        f"root = Path({str(tmp_path)!r})\n"
+        "run_codex(root=root, study='demo', run_id='signal', prompt='advance', "
+        "output_schema=root/'schema.json', log_path=root/'run.jsonl', "
+        "brief_log_path=root/'brief.jsonl', output_message=root/'last.json', "
+        "timeout_seconds=30, model=None, sandbox='workspace-write', "
+        "approval_policy='never', thread_id=None, terminate_grace_seconds=0.2)\n"
+    )
+    source = Path(__file__).resolve().parents[1] / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{source}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    proc = subprocess.Popen([sys.executable, "-c", wrapper], cwd=tmp_path, env=env)
+    deadline = time.monotonic() + 5
+    while not pid_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert pid_path.exists()
+    codex_pid = int(pid_path.read_text(encoding="utf-8"))
+
+    os.kill(proc.pid, signal.SIGTERM)
+
+    assert proc.wait(timeout=3) == 0
+    with pytest.raises(ProcessLookupError):
+        os.kill(codex_pid, 0)

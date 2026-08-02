@@ -2,6 +2,9 @@
 
 Path: `.a-exp/config.yaml`
 
+Study IDs are safe single-component slugs: they start with an ASCII letter or
+digit and contain only ASCII letters, digits, `.`, `_`, or `-`.
+
 ```yaml
 layout_version: 2
 defaults:

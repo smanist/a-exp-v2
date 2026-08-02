@@ -72,6 +72,19 @@ def verify_turn(events: list[dict[str, Any]], output: Path) -> str:
     return thread_id
 
 
+def prepare_workspace(requested: Path | None) -> Path:
+    if requested is None:
+        return Path(tempfile.mkdtemp(prefix="a-exp-codex-smoke-")).resolve()
+    root = requested.expanduser().resolve()
+    if root.exists():
+        if not root.is_dir():
+            raise ValueError(f"workspace exists and is not a directory: {root}")
+        if any(root.iterdir()):
+            raise ValueError(f"workspace must be nonexistent or empty: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -88,11 +101,13 @@ def main() -> int:
     args = parser.parse_args()
     if args.foreground_seconds < 0:
         parser.error("--foreground-seconds must be non-negative")
+    try:
+        root = prepare_workspace(args.workspace)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     if shutil.which("codex") is None:
         raise SystemExit("codex is not installed or not on PATH")
 
-    root = (args.workspace or Path(tempfile.mkdtemp(prefix="a-exp-codex-smoke-"))).resolve()
-    root.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
     (root / "AGENTS.md").write_text(
         "# Smoke Workspace\n\nFollow the prompt exactly. Do not modify unrelated files.\n",

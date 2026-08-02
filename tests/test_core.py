@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,26 @@ def test_state_validation_and_invalid_discovery(tmp_path: Path) -> None:
     assert data["studies"]["invalid"] == 1
 
 
+def test_unquoted_yaml_timestamp_is_normalized(tmp_path: Path) -> None:
+    path = tmp_path / "STATE.yaml"
+    path.write_text(
+        "schema_version: 1\n"
+        "state: ready\n"
+        "ready_after: 2026-08-02T12:00:00Z\n"
+        "summary: Ready later\n"
+        "next_direction: null\n"
+        "open_questions: []\n"
+        "requires: []\n"
+        "last_run_id: null\n"
+        "consecutive_failures: 0\n",
+        encoding="utf-8",
+    )
+
+    state = core.load_study_state(path)
+
+    assert state.ready_after == "2026-08-02T12:00:00Z"
+
+
 def test_status_contract_and_lifecycle_counts(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     write_study(tmp_path, "ready")
@@ -213,6 +234,8 @@ def test_enable_disable_requires_valid_study_and_commits(tmp_path: Path) -> None
     assert core.status_json(tmp_path)["work"]["runnable"] == 1
     with pytest.raises(core.WorkspaceError, match="not a valid study"):
         core.set_project_enabled(tmp_path, "missing", True)
+    with pytest.raises(core.WorkspaceError, match="Invalid study ID"):
+        core.set_project_enabled(tmp_path, "../outside", True)
 
 
 def test_capability_eligibility_and_host_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,6 +269,40 @@ def test_config_is_strict_and_danger_requires_project_override(tmp_path: Path) -
     )
     with pytest.raises(ValueError, match="explicit project override"):
         load_config(path)
+
+    path.write_text(
+        "layout_version: 2\nprojects:\n  /tmp/outside-study:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="study ID"):
+        load_config(path)
+
+
+def test_discovery_rejects_study_symlink_that_escapes_workspace(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-study"
+    outside.mkdir()
+    (outside / "README.md").write_text("# Outside\n", encoding="utf-8")
+    (outside / "GOAL.md").write_text("# Goal\n", encoding="utf-8")
+    core.write_study_state(outside / "STATE.yaml", core.default_invalid_state())
+    (tmp_path / "projects" / "escape").symlink_to(outside, target_is_directory=True)
+
+    data = core.status_json(tmp_path)
+
+    assert data["health"] == "degraded"
+    assert data["studies"]["invalid"] == 1
+    assert data["work"]["runnable"] == 0
+    assert any("escapes workspace" in warning for warning in data["warnings"])
+    with pytest.raises(core.WorkspaceError, match="Invalid study ID"):
+        core.thread_record_path(tmp_path, "../outside")
+
+    threads = tmp_path / ".a-exp" / "threads"
+    threads.rmdir()
+    outside_threads = tmp_path.parent / f"{tmp_path.name}-outside-threads"
+    outside_threads.mkdir()
+    threads.symlink_to(outside_threads, target_is_directory=True)
+    with pytest.raises(core.WorkspaceError, match="escapes workspace"):
+        core.thread_record_path(tmp_path, "demo")
 
 
 def test_selection_ready_after_priority_last_run_and_id(tmp_path: Path) -> None:
@@ -305,6 +362,23 @@ def test_live_and_stale_markers_derive_running(tmp_path: Path) -> None:
     data = core.status_json(tmp_path)
     assert data["sessions"]["active"] == 0
     assert not marker.exists()
+
+
+def test_invalid_live_marker_degrades_workspace(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    marker = tmp_path / ".a-exp" / "running" / "active.json"
+    marker.write_text(
+        json.dumps({"run_id": "active", "project": "../outside", "pid": os.getpid()}),
+        encoding="utf-8",
+    )
+
+    data = core.status_json(tmp_path)
+
+    assert data["health"] == "degraded"
+    assert data["sessions"]["active"] == 0
+    assert data["work"]["runnable"] == 0
+    assert any("Invalid running marker study ID" in warning for warning in data["warnings"])
 
 
 def _claim_and_hold(root: str, queue: Any, release: Any) -> None:
@@ -491,6 +565,76 @@ def test_agent_state_edit_is_unsafe_recovery(tmp_path: Path, monkeypatch: pytest
     with pytest.raises(core.AgentRunFailed, match="STATE.yaml"):
         core.run_once(tmp_path)
     assert list((tmp_path / ".a-exp" / "recovery").glob("*.json"))
+
+
+def test_agent_config_commit_is_detected_as_scheduler_owned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        config_path = tmp_path / ".a-exp" / "config.yaml"
+        config = load_config(config_path)
+        config.projects["demo"] = ProjectConfig(sandbox="danger-full-access")
+        dump_config(config, config_path)
+        git(tmp_path, "add", ".a-exp/config.yaml")
+        git(tmp_path, "commit", "-m", "Change scheduler policy")
+        return result(successful_closeout(files=[]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+
+    with pytest.raises(core.AgentRunFailed, match="scheduler-owned"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any(".a-exp/config.yaml" in error for error in recovery["errors"])
+    assert core.status_json(tmp_path)["health"] == "degraded"
+
+
+def test_closeout_oserror_creates_recovery_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(successful_closeout(next_state="completed")),
+    )
+    original_atomic_write = core.atomic_write_text
+
+    def fail_session_write(path: Path, content: str) -> None:
+        if path.parent.name == "sessions":
+            raise OSError("session storage unavailable")
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(core, "atomic_write_text", fail_session_write)
+
+    with pytest.raises(core.AgentRunFailed, match="OSError"):
+        core.run_once(tmp_path)
+    recovery = json.loads(next((tmp_path / ".a-exp" / "recovery").glob("*.json")).read_text())
+    assert any("session storage unavailable" in error for error in recovery["errors"])
+    assert not list((tmp_path / ".a-exp" / "running").glob("*.json"))
+
+
+def test_real_codex_smoke_refuses_nonempty_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "existing"
+    workspace.mkdir()
+    sentinel = workspace / "AGENTS.md"
+    sentinel.write_text("preserve me\n", encoding="utf-8")
+    script = Path(__file__).resolve().parents[1] / "scripts" / "smoke_real_codex.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(script), "--workspace", str(workspace)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "nonexistent or empty" in completed.stderr
+    assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
+    assert not (workspace / ".git").exists()
 
 
 def test_approvals_experiments_and_kanban(tmp_path: Path) -> None:

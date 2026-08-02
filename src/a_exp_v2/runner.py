@@ -248,10 +248,14 @@ def run_codex(
         timed_out = False
         received_signals: list[int] = []
         previous_handlers: dict[int, Any] = {}
+        signal_kill_deadline: float | None = None
 
         def forward_signal(signum: int, _frame: Any) -> None:
+            nonlocal signal_kill_deadline
             received_signals.append(signum)
             forwarded = signum if len(received_signals) == 1 else signal.SIGKILL
+            if len(received_signals) == 1:
+                signal_kill_deadline = time.monotonic() + max(0.01, terminate_grace_seconds)
             try:
                 os.killpg(process.pid, forwarded)
             except ProcessLookupError:
@@ -262,9 +266,23 @@ def run_codex(
                 previous_handlers[signum] = signal.getsignal(signum)
                 signal.signal(signum, forward_signal)
         try:
-            try:
-                returncode = process.wait(timeout=max(1, timeout_seconds))
-            except subprocess.TimeoutExpired:
+            timeout_deadline = started + max(1, timeout_seconds)
+            while True:
+                polled = process.poll()
+                if polled is not None:
+                    returncode = polled
+                    break
+                now = time.monotonic()
+                if signal_kill_deadline is not None and now >= signal_kill_deadline:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    returncode = process.wait()
+                    break
+                if now < timeout_deadline:
+                    time.sleep(min(0.1, timeout_deadline - now))
+                    continue
                 timed_out = True
                 returncode = 124
                 try:
@@ -279,6 +297,7 @@ def run_codex(
                     except ProcessLookupError:
                         pass
                     process.wait()
+                break
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)

@@ -11,7 +11,7 @@ durable Codex-assisted studies and bounded autonomous sessions.
   run closeout, Git safety, and status.
 - `src/a_exp_v2/runner.py`: Codex JSONL execution, resumption, timeout, signal
   forwarding, and log parsing.
-- `src/a_exp_v2/config.py`: layout-version-2 configuration.
+- `src/a_exp_v2/config.py`: layout-version-3 configuration.
 - `src/a_exp_v2/kanban.py`: lifecycle-oriented Markdown summaries.
 - `src/a_exp_v2/validators.py`: status and run-record contract checks.
 - `src/a_exp_v2/schemas/`: structured Codex final-response schemas.
@@ -22,9 +22,9 @@ durable Codex-assisted studies and bounded autonomous sessions.
 ## Generated Workspace Map
 
 `a-exp-v2 init` creates infrastructure but no study. The `project` skill creates
-`projects/<study>/README.md`, `GOAL.md`, and `STATE.yaml` in `shaping` state.
-Optional study memory includes `PLAN.md`, `DECISIONS.md`, `STEERING.md`,
-`experiments/`, and `sessions/`.
+`projects/<study>/README.md`, `GOAL.md`, `STATE.yaml`, `CONTEXT.yaml`, and an
+empty `handoffs/` directory in `shaping` state. Optional study memory includes
+`PLAN.md`, `DECISIONS.md`, `STEERING.md`, `experiments/`, and `sessions/`.
 
 Machine-local runtime state lives under ignored `.a-exp/` directories. The
 repository is authoritative: committed study files determine what future
@@ -33,13 +33,24 @@ interactive or autonomous Codex sessions know.
 ## Work Cycle
 
 Interactive sessions shape or steer a study by editing and committing its
-files. Setting committed `STATE.yaml` to `ready` makes it schedulable.
+files. After GPU work, use read-only `$reconcile`. Explicit
+`$handoff-continue` preserves the goal and requests resume; explicit
+`$handoff-change` changes the goal and requests replacement. Those skills own
+interactive ready transitions and append a committed context handoff.
+
+Material interactive computations use the experiment convention with
+`producer: interactive`; autonomous computations use `producer: autonomous`.
+Handoffs reference evidence rather than duplicating it, and interactive work
+does not create session records.
 
 For scheduler-triggered work, use the `workflow` skill. One `run-once` selects
 one ready, eligible study and runs or resumes one bounded Codex turn. The turn
 may implement code and run multiple foreground experiments. It must not edit
 `STATE.yaml`; the runner validates structured closeout and owns the state
 transition and session record.
+
+Autonomous turns must not edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`,
+`handoffs/`, `STATE.yaml`, or `sessions/`.
 
 For experiment-heavy work, consult `protocols/registry.yaml` and any applicable
 playbook, template, and checklist.

@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from typer.testing import CliRunner
 
 from a_exp_v2 import core
@@ -21,6 +23,45 @@ def commit_all(root: Path, message: str) -> None:
     env = core.git_commit_env()
     subprocess.run(["git", "-C", str(root), "add", "--all"], check=True, env=env)
     subprocess.run(["git", "-C", str(root), "commit", "-m", message], check=True, env=env)
+
+
+def write_initial_context(path: Path) -> None:
+    (path / "handoffs").mkdir(exist_ok=True)
+    handoff_id = "r0001-initial"
+    data = {
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "study": path.name,
+        "created_at": "2026-08-02T12:00:00Z",
+        "context_revision": 1,
+        "previous_handoff": None,
+        "source_commit": "0" * 40,
+        "based_on_run_id": None,
+        "change_class": "initial",
+        "thread_policy": "resume",
+        "goal_sha256": core.content_hash(path / "GOAL.md"),
+        "steering_sha256": None,
+        "summary": "Initial handoff",
+        "decisions": [],
+        "constraints": [],
+        "retained_evidence": [],
+        "superseded_assumptions": [],
+        "rejected_alternatives": [],
+        "next_direction": None,
+        "open_questions": [],
+        "relevant_paths": [],
+        "interactive_experiments": [],
+        "interactive_commits": [],
+        "artifacts": [],
+        "source_thread_id": None,
+    }
+    (path / "handoffs" / f"{handoff_id}.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+    core.write_study_context(
+        path / "CONTEXT.yaml",
+        core.StudyContext(revision=1, latest_handoff=handoff_id),
+    )
 
 
 def write_study(root: Path, name: str, state: str) -> None:
@@ -44,6 +85,13 @@ def write_study(root: Path, name: str, state: str) -> None:
             consecutive_failures=0,
         ),
     )
+    (path / "handoffs").mkdir(exist_ok=True)
+    if state == "shaping":
+        core.write_study_context(
+            path / "CONTEXT.yaml", core.StudyContext(revision=0, latest_handoff=None)
+        )
+    else:
+        write_initial_context(path)
     commit_all(root, f"Create {name}")
 
 
@@ -126,6 +174,7 @@ def test_cli_no_work_and_active_run_messages(tmp_path: Path) -> None:
         assert no_work.stdout == "No runnable work.\n"
 
         state = core.load_study_state(root / "projects" / "demo" / "STATE.yaml")
+        write_initial_context(root / "projects" / "demo")
         core.write_study_state(root / "projects" / "demo" / "STATE.yaml", core.replace(state, state="ready"))
         commit_all(root, "Ready demo")
         (root / ".a-exp" / "running" / "active.json").write_text(
@@ -164,4 +213,4 @@ def test_cli_invalid_config_exits_two(tmp_path: Path) -> None:
         result = runner.invoke(app, ["status", "--json"])
 
         assert result.exit_code == 2
-        assert "layout_version must be 2" in result.stderr
+        assert "layout_version must be 3" in result.stderr

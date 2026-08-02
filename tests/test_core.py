@@ -35,6 +35,45 @@ def commit_all(root: Path, message: str = "Shape study") -> None:
     git(root, "commit", "-m", message)
 
 
+def write_initial_context(root: Path, path: Path) -> None:
+    (path / "handoffs").mkdir(exist_ok=True)
+    handoff_id = "r0001-initial"
+    handoff = {
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "study": path.name,
+        "created_at": "2026-08-02T12:00:00Z",
+        "context_revision": 1,
+        "previous_handoff": None,
+        "source_commit": "0" * 40,
+        "based_on_run_id": None,
+        "change_class": "initial",
+        "thread_policy": "resume",
+        "goal_sha256": core.content_hash(path / "GOAL.md"),
+        "steering_sha256": None,
+        "summary": "Initial interactive handoff",
+        "decisions": [],
+        "constraints": [],
+        "retained_evidence": [],
+        "superseded_assumptions": [],
+        "rejected_alternatives": [],
+        "next_direction": "Continue",
+        "open_questions": [],
+        "relevant_paths": [],
+        "interactive_experiments": [],
+        "interactive_commits": [],
+        "artifacts": [],
+        "source_thread_id": None,
+    }
+    (path / "handoffs" / f"{handoff_id}.yaml").write_text(
+        yaml.safe_dump(handoff, sort_keys=False), encoding="utf-8"
+    )
+    core.write_study_context(
+        path / "CONTEXT.yaml",
+        core.StudyContext(revision=1, latest_handoff=handoff_id),
+    )
+
+
 def write_study(
     root: Path,
     name: str,
@@ -68,6 +107,13 @@ def write_study(
             consecutive_failures=failures,
         ),
     )
+    (path / "handoffs").mkdir(exist_ok=True)
+    if state == "shaping":
+        core.write_study_context(
+            path / "CONTEXT.yaml", core.StudyContext(revision=0, latest_handoff=None)
+        )
+    else:
+        write_initial_context(root, path)
     if commit:
         commit_all(root, f"Shape {name}")
     return path
@@ -120,6 +166,98 @@ def result(
     )
 
 
+def completed_session_data(
+    study: str,
+    run_id: str,
+    *,
+    next_state: str = "ready",
+    summary: str = "Completed test session",
+    artifacts: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "run_id": run_id,
+        "study": study,
+        "status": "completed",
+        "outcome": "progress" if next_state == "ready" else next_state,
+        "previous_state": "ready",
+        "next_state": next_state,
+        "started_at": "2026-08-01T00:00:00Z",
+        "ended_at": "2026-08-01T00:01:00Z",
+        "codex_thread_id": f"thread-{study}",
+        "replaced_thread_id": None,
+        "context_revision": 1,
+        "handoff_id": "r0001-initial",
+        "requested_thread_policy": "resume",
+        "applied_thread_action": "new",
+        "context_consumed": True,
+        "summary": summary,
+        "experiments": [],
+        "verification": [{"command": "pytest", "result": "passed"}],
+        "files_changed": [],
+        "artifacts": artifacts or [],
+        "budget_used": {"wall_seconds": 1, "experiments": 0},
+        "commits": [],
+        "next_direction": None,
+        "open_questions": [],
+    }
+
+
+def append_handoff(
+    root: Path,
+    path: Path,
+    *,
+    change_class: str,
+    thread_policy: str,
+    superseded_assumptions: list[str] | None = None,
+    interactive_experiments: list[str] | None = None,
+    artifacts: list[str] | None = None,
+) -> str:
+    context = core.load_study_context(path / "CONTEXT.yaml")
+    assert context.latest_handoff is not None
+    revision = context.revision + 1
+    handoff_id = f"r{revision:04d}-test"
+    data = {
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "study": path.name,
+        "created_at": f"2026-08-{revision + 2:02d}T12:00:00Z",
+        "context_revision": revision,
+        "previous_handoff": context.latest_handoff,
+        "source_commit": "1" * 40,
+        "based_on_run_id": None,
+        "change_class": change_class,
+        "thread_policy": thread_policy,
+        "goal_sha256": core.content_hash(path / "GOAL.md"),
+        "steering_sha256": (
+            core.content_hash(path / "STEERING.md")
+            if (path / "STEERING.md").exists()
+            else None
+        ),
+        "summary": f"Revision {revision}",
+        "decisions": [],
+        "constraints": [],
+        "retained_evidence": [],
+        "superseded_assumptions": superseded_assumptions or [],
+        "rejected_alternatives": [],
+        "next_direction": "Continue",
+        "open_questions": [],
+        "relevant_paths": [],
+        "interactive_experiments": interactive_experiments or [],
+        "interactive_commits": [],
+        "artifacts": artifacts or [],
+        "source_thread_id": None,
+    }
+    (path / "handoffs" / f"{handoff_id}.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+    core.write_study_context(
+        path / "CONTEXT.yaml",
+        core.StudyContext(revision=revision, latest_handoff=handoff_id),
+    )
+    return handoff_id
+
+
 def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     created = core.init_workspace(tmp_path)
 
@@ -127,7 +265,10 @@ def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     assert (tmp_path / "projects").is_dir()
     assert list((tmp_path / "projects").iterdir()) == []
     assert (tmp_path / "docs" / "schemas" / "study.md").exists()
+    assert (tmp_path / "docs" / "schemas" / "context-handoff.md").exists()
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
+    assert load_config(tmp_path / ".a-exp" / "config.yaml").layout_version == 3
+    assert yaml.safe_load((tmp_path / ".a-exp" / "kit.lock.yaml").read_text())["version"] == "0.3.0"
     assert "STATE.yaml" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert git(tmp_path, "log", "-1", "--format=%s") == "Initialize a-exp-v2 workspace"
     assert git(tmp_path, "status", "--short") == ""
@@ -151,6 +292,19 @@ def test_init_rejects_external_runtime_root_before_writing(tmp_path: Path) -> No
     assert list(outside.iterdir()) == []
 
 
+def test_package_tree_symlink_requires_source_inside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "installed-package" / "skills"
+    outside.mkdir(parents=True)
+    monkeypatch.setattr(core, "package_resource_path", lambda _: outside)
+
+    assert core.symlink_package_tree(workspace, "skills", ".agents/skills") is None
+    assert not (workspace / ".agents" / "skills").exists()
+
+
 def test_state_validation_and_invalid_discovery(tmp_path: Path) -> None:
     core.init_workspace(tmp_path)
     path = write_study(tmp_path, "bad", commit=False)
@@ -159,7 +313,7 @@ def test_state_validation_and_invalid_discovery(tmp_path: Path) -> None:
 
     studies, issues = core.discover_studies(tmp_path)
     assert studies[0].effective_state == "invalid"
-    assert any("STATE.yaml" in issue for issue in issues)
+    assert any("Invalid projects/bad" in issue for issue in issues)
     data = core.status_json(tmp_path)
     assert data["health"] == "degraded"
     assert data["studies"]["invalid"] == 1
@@ -271,18 +425,18 @@ def test_capability_eligibility_and_host_override(tmp_path: Path, monkeypatch: p
 
 def test_config_is_strict_and_danger_requires_project_override(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
-    path.write_text("layout_version: 2\ndefaults:\n  mystery: 1\n", encoding="utf-8")
+    path.write_text("layout_version: 3\ndefaults:\n  mystery: 1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unknown"):
         load_config(path)
     path.write_text(
-        "layout_version: 2\ndefaults:\n  sandbox: danger-full-access\n",
+        "layout_version: 3\ndefaults:\n  sandbox: danger-full-access\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="explicit project override"):
         load_config(path)
 
     path.write_text(
-        "layout_version: 2\nprojects:\n  /tmp/outside-study:\n    enabled: true\n",
+        "layout_version: 3\nprojects:\n  /tmp/outside-study:\n    enabled: true\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="study ID"):
@@ -369,7 +523,9 @@ def test_selection_ready_after_priority_last_run_and_id(tmp_path: Path) -> None:
 
     session = tmp_path / "projects" / "alpha" / "sessions" / "old.yaml"
     session.parent.mkdir(parents=True)
-    session.write_text("started_at: 2026-01-01T00:00:00Z\n", encoding="utf-8")
+    old_session = completed_session_data("alpha", "old")
+    old_session["started_at"] = "2026-01-01T00:00:00Z"
+    session.write_text(yaml.safe_dump(old_session, sort_keys=False), encoding="utf-8")
     commit_all(tmp_path, "Record alpha history")
     studies, _ = core.discover_studies(tmp_path)
     assert core.select_study(studies).project == "zeta"
@@ -478,6 +634,11 @@ def test_successful_run_applies_each_valid_next_state(
     assert record is not None
     assert record["next_state"] == next_state
     assert record["experiments"] == ["exp-a", "exp-b"]
+    assert record["context_revision"] == 1
+    assert record["handoff_id"] == "r0001-initial"
+    assert record["requested_thread_policy"] == "resume"
+    assert record["applied_thread_action"] == "new"
+    assert record["context_consumed"] is True
     assert validate_run_record(record) == []
     state = core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml")
     assert state.state == next_state
@@ -516,7 +677,7 @@ def test_success_closeout_stages_declared_paths_and_records_checkpoint_commits(
 def test_resume_failure_before_turn_replaces_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     core.init_workspace(tmp_path)
     write_study(tmp_path, "demo")
-    core.write_thread_record(tmp_path, "demo", "missing-thread", "old-run")
+    core.write_thread_record(tmp_path, "demo", "missing-thread", "old-run", 1)
     calls: list[str | None] = []
 
     def fake_run_codex(**kwargs: Any) -> CodexRunResult:
@@ -530,6 +691,8 @@ def test_resume_failure_before_turn_replaces_thread(tmp_path: Path, monkeypatch:
     assert calls == ["missing-thread", None]
     assert record["codex_thread_id"] == "replacement"
     assert record["replaced_thread_id"] == "missing-thread"
+    assert record["requested_thread_policy"] == "resume"
+    assert record["applied_thread_action"] == "resume_fallback"
     assert core.read_thread_id(tmp_path, "demo") == "replacement"
 
 
@@ -727,6 +890,8 @@ def test_approvals_experiments_and_kanban(tmp_path: Path) -> None:
     experiment = study / "experiments" / "exp-a"
     experiment.mkdir(parents=True)
     (experiment / "EXPERIMENT.md").write_text(
+        "---\nid: exp-a\nstatus: completed\ndate: 2026-08-01\n"
+        "study: demo\nprotocol: test.v1\nproducer: autonomous\n---\n\n"
         "# exp-a\n\n## Findings\n\n- Faster and stable.\n",
         encoding="utf-8",
     )
@@ -735,13 +900,13 @@ def test_approvals_experiments_and_kanban(tmp_path: Path) -> None:
     session.parent.mkdir()
     session.write_text(
         yaml.safe_dump(
-            {
-                "run_id": "run",
-                "status": "completed",
-                "started_at": "2026-08-01T00:00:00Z",
-                "summary": "Compared methods",
-                "artifacts": ["projects/demo/artifacts/plot.png"],
-            }
+            completed_session_data(
+                "demo",
+                "run",
+                next_state="needs_human",
+                summary="Compared methods",
+                artifacts=["projects/demo/artifacts/plot.png"],
+            )
         ),
         encoding="utf-8",
     )
@@ -811,3 +976,475 @@ def test_fake_overnight_sequence_resumes_study_thread_without_overlap(
     )
     assert len(list((tmp_path / "projects" / "beta" / "sessions").glob("*.yaml"))) == 2
     assert list((tmp_path / ".a-exp" / "running").glob("*.json")) == []
+
+
+def test_revision_zero_is_shaping_only_and_context_is_mandatory(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "shape", state="shaping")
+    studies, issues = core.discover_studies(tmp_path)
+    assert issues == []
+    assert studies[0].context_data.revision == 0
+
+    (study / "CONTEXT.yaml").unlink()
+    commit_all(tmp_path, "Remove mandatory context")
+    assert core.status_json(tmp_path)["studies"]["invalid"] == 1
+    assert any("CONTEXT.yaml" in issue for issue in core.discover_studies(tmp_path)[1])
+
+
+def test_direct_ready_transition_at_revision_zero_is_rejected(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="shaping")
+    state = core.load_study_state(study / "STATE.yaml")
+    core.write_study_state(study / "STATE.yaml", replace(state, state="ready"))
+    commit_all(tmp_path, "Unsupported direct ready transition")
+
+    data = core.status_json(tmp_path)
+    assert data["studies"]["invalid"] == 1
+    assert any("revision 0" in warning for warning in data["warnings"])
+
+
+def test_continuation_and_major_change_transition_invariants(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    continuation = write_study(tmp_path, "continue")
+    append_handoff(
+        tmp_path,
+        continuation,
+        change_class="continuation",
+        thread_policy="resume",
+    )
+    commit_all(tmp_path, "Continue unchanged goal")
+    studies, issues = core.discover_studies(tmp_path)
+    assert issues == []
+    assert studies[0].context_data.revision == 2
+
+    major = write_study(tmp_path, "major", commit=False)
+    (major / "GOAL.md").write_text("# Goal\n\nA substantially revised objective.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        major,
+        change_class="major_change",
+        thread_policy="replace",
+        superseded_assumptions=["The original objective still controls the study"],
+    )
+    commit_all(tmp_path, "Replace changed goal")
+    studies, issues = core.discover_studies(tmp_path)
+    assert issues == []
+    assert {study.handoff_data.change_class for study in studies} == {
+        "continuation",
+        "major_change",
+    }
+
+
+@pytest.mark.parametrize(
+    ("change_class", "thread_policy", "change_goal", "superseded", "message"),
+    [
+        ("continuation", "resume", True, [], "unchanged GOAL.md hash"),
+        ("continuation", "replace", False, [], "resume policy"),
+        ("major_change", "replace", False, ["old"], "changed GOAL.md hash"),
+        ("major_change", "replace", True, [], "superseded_assumptions"),
+    ],
+)
+def test_invalid_handoff_transition_is_rejected(
+    tmp_path: Path,
+    change_class: str,
+    thread_policy: str,
+    change_goal: bool,
+    superseded: list[str],
+    message: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    if change_goal:
+        (study / "GOAL.md").write_text("# Goal\n\nChanged bytes.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        study,
+        change_class=change_class,
+        thread_policy=thread_policy,
+        superseded_assumptions=superseded,
+    )
+    commit_all(tmp_path, "Write invalid transition")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("unsafe_path", "repo-relative"),
+        ("secret", "secret"),
+        ("transcript", "transcripts"),
+        ("oversize", "exceeds"),
+    ],
+)
+def test_handoff_safety_limits(tmp_path: Path, mutation: str, message: str) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    path = study / "handoffs" / "r0001-initial.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if mutation == "unsafe_path":
+        data["relevant_paths"] = ["../outside"]
+    elif mutation == "secret":
+        data["summary"] = "api_key: super-secret-value"
+    elif mutation == "transcript":
+        data["summary"] = "transcript: copied conversation"
+    else:
+        data["summary"] = "x" * (core.MAX_HANDOFF_BYTES + 1)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    commit_all(tmp_path, f"Write {mutation} handoff")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any(message in issue for issue in issues)
+
+
+def test_handoff_writer_is_append_only(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    latest, _ = core.load_handoff_chain(
+        tmp_path,
+        study,
+        core.load_study_context(study / "CONTEXT.yaml"),
+    )
+    assert latest is not None
+    new = replace(
+        latest,
+        handoff_id="r0002-writer",
+        context_revision=2,
+        previous_handoff=latest.handoff_id,
+        path="projects/demo/handoffs/r0002-writer.yaml",
+    )
+    written = core.write_handoff_record(tmp_path, study, new)
+    assert written.is_file()
+    with pytest.raises(core.WorkspaceError, match="append-only"):
+        core.write_handoff_record(tmp_path, study, new)
+
+
+def test_interactive_evidence_is_referenced_and_producer_checked(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    experiment_ids = ["positive", "negative", "failed"]
+    for experiment_id in experiment_ids:
+        directory = study / "experiments" / experiment_id
+        directory.mkdir(parents=True)
+        (directory / "EXPERIMENT.md").write_text(
+            "---\n"
+            f"id: {experiment_id}\n"
+            f"status: {'failed' if experiment_id == 'failed' else 'completed'}\n"
+            "date: 2026-08-02\n"
+            "study: demo\n"
+            "protocol: test.v1\n"
+            "producer: interactive\n"
+            "---\n\n"
+            f"# {experiment_id}\n\n"
+            "## Execution\n\nCommand, configuration, revision, and GPU recorded.\n\n"
+            "## Results\n\nMetrics and artifact paths recorded.\n\n"
+            "## Findings\n\nNegative and failed evidence is retained.\n\n"
+            "## Caveats\n\nKnown limits.\n\n"
+            "## Verification\n\nChecked output.\n",
+            encoding="utf-8",
+        )
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="continuation",
+        thread_policy="resume",
+        interactive_experiments=experiment_ids,
+        artifacts=["projects/demo/experiments/negative/metrics.json"],
+    )
+    commit_all(tmp_path, "Record material interactive evidence")
+    studies, issues = core.discover_studies(tmp_path)
+    assert issues == []
+    assert studies[0].handoff_data.interactive_experiments == experiment_ids
+    assert not (study / "sessions").exists()
+
+    failed_record = study / "experiments" / "failed" / "EXPERIMENT.md"
+    failed_record.write_text(
+        failed_record.read_text(encoding="utf-8").replace(
+            "producer: interactive", "producer: autonomous"
+        ),
+        encoding="utf-8",
+    )
+    commit_all(tmp_path, "Misclassify interactive evidence")
+    assert any("producer: interactive" in issue for issue in core.discover_studies(tmp_path)[1])
+
+
+def test_legacy_session_schema_is_rejected(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo", state="needs_human")
+    sessions = study / "sessions"
+    sessions.mkdir()
+    (sessions / "old.yaml").write_text(
+        "schema_version: 1\nrun_id: old\nstudy: demo\nstatus: completed\n",
+        encoding="utf-8",
+    )
+    commit_all(tmp_path, "Add legacy session")
+
+    _, issues = core.discover_studies(tmp_path)
+    assert any("schema_version must be 2" in issue for issue in issues)
+
+
+def test_context_consumption_uses_only_committed_sessions(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    sessions = study / "sessions"
+    sessions.mkdir()
+    record = completed_session_data("demo", "manual")
+    (sessions / "manual.yaml").write_text(
+        yaml.safe_dump(record, sort_keys=False), encoding="utf-8"
+    )
+
+    item = core.status_json(tmp_path)["studies"]["items"][0]
+    assert item["consumed_context_revision"] == 0
+    assert item["context_pending"] is True
+
+    commit_all(tmp_path, "Commit completed session")
+    item = core.status_json(tmp_path)["studies"]["items"][0]
+    assert item["consumed_context_revision"] == 1
+    assert item["context_pending"] is False
+
+
+def test_stale_ready_requires_a_new_context_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    monkeypatch.setattr(
+        core,
+        "run_codex",
+        lambda **_: result(successful_closeout(next_state="completed"), thread_id="thread-1"),
+    )
+    core.run_once(tmp_path)
+    completed_state = core.load_study_state(study / "STATE.yaml")
+    core.write_study_state(study / "STATE.yaml", replace(completed_state, state="ready"))
+    commit_all(tmp_path, "Unsupported stale reactivation")
+    assert any("stale interactive ready transition" in issue for issue in core.discover_studies(tmp_path)[1])
+
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="continuation",
+        thread_policy="resume",
+    )
+    commit_all(tmp_path, "Advance context for reactivation")
+    studies, issues = core.discover_studies(tmp_path)
+    assert issues == []
+    assert studies[0].context_data.revision == 2
+
+
+def test_continuation_resumes_and_advances_thread_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "thread-old", "old-run", 1)
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="continuation",
+        thread_policy="resume",
+    )
+    commit_all(tmp_path, "Continue to revision 2")
+    calls: list[str | None] = []
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        calls.append(kwargs["thread_id"])
+        return result(successful_closeout(next_state="completed"), thread_id="thread-old")
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    record = core.run_once(tmp_path)
+    assert calls == ["thread-old"]
+    assert record["requested_thread_policy"] == "resume"
+    assert record["applied_thread_action"] == "resume"
+    assert core.read_thread_record(tmp_path, "demo")["context_revision"] == 2
+
+
+def test_major_replacement_is_not_repeated_after_failed_closeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "thread-old", "old-run", 1)
+    (study / "GOAL.md").write_text("# Goal\n\nReplacement objective.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="major_change",
+        thread_policy="replace",
+        superseded_assumptions=["Original objective controls the work"],
+    )
+    commit_all(tmp_path, "Major change revision 2")
+    calls: list[str | None] = []
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        calls.append(kwargs["thread_id"])
+        if len(calls) == 1:
+            return result(None, returncode=1, thread_id="thread-new", turn_started=True)
+        return result(successful_closeout(next_state="completed"), thread_id="thread-new")
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed):
+        core.run_once(tmp_path)
+    mapping = core.read_thread_record(tmp_path, "demo")
+    assert mapping["thread_id"] == "thread-new"
+    assert mapping["context_revision"] == 2
+    failed_state = core.load_study_state(study / "STATE.yaml")
+    core.write_study_state(study / "STATE.yaml", replace(failed_state, ready_after=None))
+    commit_all(tmp_path, "Make replacement retry due")
+
+    completed = core.run_once(tmp_path)
+    assert calls == [None, "thread-new"]
+    assert completed["requested_thread_policy"] == "replace"
+    assert completed["applied_thread_action"] == "resume"
+    sessions = core.session_records(tmp_path, "demo")
+    assert sessions[0]["applied_thread_action"] == "replace"
+    assert sessions[0]["context_consumed"] is False
+    assert sessions[0]["replaced_thread_id"] == "thread-old"
+    assert sessions[1]["context_consumed"] is True
+    status = core.status_json(tmp_path)["studies"]["items"][0]
+    assert status["context_pending"] is False
+    assert status["superseded_thread_id"] == "thread-old"
+
+
+def test_replacement_retries_when_no_new_thread_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+    core.write_thread_record(tmp_path, "demo", "thread-old", "old-run", 1)
+    (study / "GOAL.md").write_text("# Goal\n\nReplacement objective.\n", encoding="utf-8")
+    append_handoff(
+        tmp_path,
+        study,
+        change_class="major_change",
+        thread_policy="replace",
+        superseded_assumptions=["Original objective controls the work"],
+    )
+    commit_all(tmp_path, "Major change revision 2")
+    calls: list[str | None] = []
+
+    def fake_run_codex(**kwargs: Any) -> CodexRunResult:
+        calls.append(kwargs["thread_id"])
+        if len(calls) == 1:
+            return result(None, returncode=1, thread_id=None, turn_started=False)
+        return result(successful_closeout(next_state="completed"), thread_id="thread-new")
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed):
+        core.run_once(tmp_path)
+    assert core.read_thread_record(tmp_path, "demo")["thread_id"] == "thread-old"
+    assert core.read_thread_record(tmp_path, "demo")["context_revision"] == 1
+    failed_state = core.load_study_state(study / "STATE.yaml")
+    core.write_study_state(study / "STATE.yaml", replace(failed_state, ready_after=None))
+    commit_all(tmp_path, "Make replacement retry due")
+
+    completed = core.run_once(tmp_path)
+    assert calls == [None, None]
+    assert completed["applied_thread_action"] == "replace"
+    assert completed["replaced_thread_id"] == "thread-old"
+    assert core.read_thread_record(tmp_path, "demo")["thread_id"] == "thread-new"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "projects/demo/GOAL.md",
+        "projects/demo/STEERING.md",
+        "projects/demo/CONTEXT.yaml",
+        "projects/demo/handoffs/agent.yaml",
+    ],
+)
+def test_autonomous_control_file_edits_are_forbidden(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("agent edit\n", encoding="utf-8")
+        return result(successful_closeout(files=[relative_path]))
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="scheduler-owned"):
+        core.run_once(tmp_path)
+
+
+@pytest.mark.parametrize("producer", ["interactive", "missing"])
+def test_autonomous_experiment_requires_autonomous_producer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    producer: str,
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        record = study / "experiments" / "gpu-exp" / "EXPERIMENT.md"
+        record.parent.mkdir(parents=True)
+        producer_line = "" if producer == "missing" else f"producer: {producer}\n"
+        record.write_text(
+            "---\nid: gpu-exp\nstatus: completed\ndate: 2026-08-02\n"
+            f"study: demo\nprotocol: test.v1\n{producer_line}---\n\n# GPU experiment\n",
+            encoding="utf-8",
+        )
+        return result(
+            successful_closeout(
+                files=["projects/demo/experiments/gpu-exp/EXPERIMENT.md"],
+                experiments=["gpu-exp"],
+            )
+        )
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    with pytest.raises(core.AgentRunFailed, match="producer"):
+        core.run_once(tmp_path)
+
+
+def test_autonomous_experiment_accepts_autonomous_producer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core.init_workspace(tmp_path)
+    study = write_study(tmp_path, "demo")
+
+    def fake_run_codex(**_: Any) -> CodexRunResult:
+        record = study / "experiments" / "gpu-exp" / "EXPERIMENT.md"
+        record.parent.mkdir(parents=True)
+        record.write_text(
+            "---\nid: gpu-exp\nstatus: completed\ndate: 2026-08-02\n"
+            "study: demo\nprotocol: test.v1\nproducer: autonomous\n---\n\n"
+            "# GPU experiment\n",
+            encoding="utf-8",
+        )
+        return result(
+            successful_closeout(
+                next_state="completed",
+                files=["projects/demo/experiments/gpu-exp/EXPERIMENT.md"],
+                experiments=["gpu-exp"],
+            )
+        )
+
+    monkeypatch.setattr(core, "run_codex", fake_run_codex)
+    completed = core.run_once(tmp_path)
+    assert completed["next_state"] == "completed"
+    assert core.status_json(tmp_path)["health"] == "ok"
+
+
+def test_packaged_handoff_skills_have_ui_invocation_policy(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    skills = tmp_path / ".agents" / "skills"
+    expected = {
+        "reconcile": True,
+        "handoff-continue": False,
+        "handoff-change": False,
+    }
+    for name, implicit in expected.items():
+        skill_text = (skills / name / "SKILL.md").read_text(encoding="utf-8")
+        metadata = yaml.safe_load(
+            (skills / name / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        )
+        assert metadata["policy"]["allow_implicit_invocation"] is implicit
+        assert f"${name}" in metadata["interface"]["default_prompt"]
+        assert "docs/schemas/context-handoff.md" in skill_text

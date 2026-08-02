@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 DEFAULT_PRIORITY = 100
 DEFAULT_MODEL: str | None = None
 DEFAULT_MAX_RUN_DURATION_MS = 43_200_000

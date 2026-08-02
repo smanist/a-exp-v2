@@ -7,13 +7,15 @@ source of truth.
 
 ## Units
 
-- A **study** is `projects/<study>/` with `README.md`, `GOAL.md`, and
-  `STATE.yaml`.
+- A **study** is `projects/<study>/` with `README.md`, `GOAL.md`, `STATE.yaml`,
+  `CONTEXT.yaml`, and append-only `handoffs/`.
 - A **session** is one bounded `codex exec` turn selected by `run-once`. It may
   implement code and run multiple coherent foreground experiments.
 - An **experiment** is durable study evidence under `experiments/`.
 - A **thread record** is ignored machine-local resumption metadata. Losing it
   causes a replacement thread, not loss of the study.
+- A **handoff** is the committed interactive closeout and ownership baton. It
+  references experiment evidence without duplicating full results.
 
 ## Lifecycle
 
@@ -22,8 +24,8 @@ Persisted states are `shaping`, `ready`, `needs_human`, `paused`, `blocked`,
 ineligible, and invalid are effective scheduling states.
 
 Interactive work can shape and steer any study by editing repository files.
-Committing `state: ready` hands it to the scheduler. `run-once` atomically
-selects a ready study, verifies a clean checkout, starts or resumes Codex,
+Explicit handoff skills commit a new context revision and `state: ready`.
+`run-once` atomically selects a ready study, verifies a clean checkout, starts or resumes Codex,
 validates declared changes and structured closeout, commits the session record
 and state transition, and returns.
 
@@ -36,6 +38,9 @@ and state transition, and returns.
 - A dirty or ambiguous recovery state degrades health and stops scheduling.
 - Closeout stages only declared paths plus runner-owned `STATE.yaml` and session
   record files.
+- Autonomous turns cannot edit interactive context/control files. Interactive
+  and autonomous material computations share experiment conventions and state
+  their producer; interactive turns never create session records.
 
 ## Layout
 
@@ -46,6 +51,8 @@ projects/<study>/
   README.md
   GOAL.md
   STATE.yaml
+  CONTEXT.yaml
+  handoffs/               # committed interactive closeouts
   PLAN.md                 # optional
   DECISIONS.md            # optional
   STEERING.md             # optional

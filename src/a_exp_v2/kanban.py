@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .core import discover_studies, session_records
+from .core import consumed_context_revision, discover_studies, session_records
 
 
 def compact(text: str, limit: int = 240) -> str:
@@ -57,6 +57,18 @@ def recent_run_summaries(records: list[dict[str, Any]], limit: int = 8) -> list[
 def generate_study(root: Path, study: Any) -> str:
     state = study.state_data
     records = session_records(root, study.project) if study.valid else []
+    consumed_revision = consumed_context_revision(records)
+    handoff = study.handoff_data
+    last_record = records[-1] if records else {}
+    superseded_thread_id = next(
+        (
+            record.get("replaced_thread_id")
+            for record in reversed(records)
+            if isinstance(record.get("replaced_thread_id"), str)
+            and record.get("replaced_thread_id")
+        ),
+        None,
+    )
     lines = [
         f"# Study: {study.project}",
         "",
@@ -67,6 +79,13 @@ def generate_study(root: Path, study: Any) -> str:
         f"- Ready after: `{state.ready_after or 'now'}`",
         f"- Last run: `{state.last_run_id or 'never'}`",
         f"- Consecutive failures: {state.consecutive_failures}",
+        f"- Context revision: `{study.context_data.revision}`",
+        f"- Consumed revision: `{consumed_revision}`",
+        f"- Pending handoff: `{'yes' if study.context_data.revision > consumed_revision else 'no'}`",
+        f"- Latest handoff: `{study.context_data.latest_handoff or 'none'}`",
+        f"- Requested thread policy: `{handoff.thread_policy if handoff else 'none'}`",
+        f"- Last thread action: `{last_record.get('applied_thread_action') or 'none'}`",
+        f"- Superseded thread: `{superseded_thread_id or 'none'}`",
         "",
         "## Current Direction",
         "",

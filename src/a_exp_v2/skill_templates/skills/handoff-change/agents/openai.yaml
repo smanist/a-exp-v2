@@ -1,0 +1,6 @@
+interface:
+  display_name: "Handoff Change"
+  short_description: "Replace GPU context after a major goal change"
+  default_prompt: "Use $handoff-change to revise the study goal and return it to GPU work with one context replacement."
+policy:
+  allow_implicit_invocation: false

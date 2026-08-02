@@ -9,8 +9,9 @@ Use this skill when `a-exp run-once` selects a study.
 
 ## Orient
 
-Read `AGENTS.md`, the selected study's `README.md`, `GOAL.md`, and `STATE.yaml`.
-Then read any `STEERING.md`, `PLAN.md`, `DECISIONS.md`, prior sessions,
+Read `AGENTS.md`, the selected study's `README.md`, `GOAL.md`, `CONTEXT.yaml`,
+the validated latest handoff, and `STATE.yaml`. Current committed files outrank
+the handoff, older records, and thread memory. Then read any `STEERING.md`, `PLAN.md`, `DECISIONS.md`, prior sessions,
 experiments, reports, budgets, artifacts, and approval entries that affect the
 current direction. Consult `protocols/registry.yaml`; when a protocol applies,
 read its playbook, schema, template, checklist, and relevant helper guidance.
@@ -22,8 +23,11 @@ conditions. You may implement code and run multiple coherent foreground
 experiments. Do not launch unmanaged detached processes. Use the `packet` skill
 for separately scoped implementation intended for an `a-dev` workflow.
 
-Commit after each material experiment or coherent code change. Never edit
-`STATE.yaml`; the runner owns lifecycle closeout.
+Every GPU-produced experiment must declare `producer: autonomous` and record
+its context revision. Commit after each material experiment or coherent code
+change. Never edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`, `handoffs/`,
+`STATE.yaml`, or `sessions/`; interactive skills and the runner own those
+control paths.
 
 ## Finish
 
@@ -44,5 +48,5 @@ Allowed next states are `ready`, `needs_human`, `paused`, `blocked`, and
 make the questions concrete. Infrastructure `failed` is runner-owned.
 
 Before answering, inspect `git status --short`. The runner will reject
-undeclared paths, scheduler-owned `.a-exp` paths, and any modification to
-`STATE.yaml`.
+undeclared paths, scheduler-owned `.a-exp` paths, and any modification to the
+forbidden control paths above.

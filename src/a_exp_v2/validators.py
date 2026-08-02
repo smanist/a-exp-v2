@@ -18,6 +18,8 @@ STUDY_STATES = {
     "invalid",
 }
 RUN_STATUSES = {"completed", "failed"}
+THREAD_POLICIES = {"resume", "replace"}
+THREAD_ACTIONS = {"new", "resume", "replace", "resume_fallback"}
 
 
 def _non_negative_int(value: Any) -> bool:
@@ -83,6 +85,13 @@ def validate_status_json(data: dict[str, Any]) -> list[str]:
         "last_run_at",
         "run_count",
         "consecutive_failures",
+        "context_revision",
+        "consumed_context_revision",
+        "context_pending",
+        "latest_handoff",
+        "requested_thread_policy",
+        "last_thread_action",
+        "superseded_thread_id",
     ]
     effective_counts = {
         key: 0 for key in count_fields if key not in {"total", "enabled", "disabled"}
@@ -118,6 +127,39 @@ def validate_status_json(data: dict[str, Any]) -> list[str]:
             errors.append(
                 f"studies.items[{index}].consecutive_failures must be non-negative"
             )
+        if not _non_negative_int(item.get("context_revision")):
+            errors.append(f"studies.items[{index}].context_revision must be non-negative")
+        if not _non_negative_int(item.get("consumed_context_revision")):
+            errors.append(
+                f"studies.items[{index}].consumed_context_revision must be non-negative"
+            )
+        if not isinstance(item.get("context_pending"), bool):
+            errors.append(f"studies.items[{index}].context_pending must be boolean")
+        revision = item.get("context_revision")
+        consumed = item.get("consumed_context_revision")
+        if _non_negative_int(revision) and _non_negative_int(consumed):
+            if item.get("context_pending") != (revision > consumed):
+                errors.append(f"studies.items[{index}].context_pending is inconsistent")
+        latest_handoff = item.get("latest_handoff")
+        if latest_handoff is not None and (
+            not isinstance(latest_handoff, str) or not latest_handoff
+        ):
+            errors.append(f"studies.items[{index}].latest_handoff invalid")
+        if revision == 0 and latest_handoff is not None:
+            errors.append(f"studies.items[{index}].revision 0 cannot have a handoff")
+        if isinstance(revision, int) and revision > 0 and latest_handoff is None:
+            errors.append(f"studies.items[{index}] positive revision requires a handoff")
+        policy = item.get("requested_thread_policy")
+        if policy is not None and policy not in THREAD_POLICIES:
+            errors.append(f"studies.items[{index}].requested_thread_policy invalid")
+        action = item.get("last_thread_action")
+        if action is not None and action not in THREAD_ACTIONS:
+            errors.append(f"studies.items[{index}].last_thread_action invalid")
+        superseded = item.get("superseded_thread_id")
+        if superseded is not None and (
+            not isinstance(superseded, str) or not superseded
+        ):
+            errors.append(f"studies.items[{index}].superseded_thread_id invalid")
     expected = {
         "total": len(items),
         "enabled": enabled,
@@ -142,12 +184,18 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         "started_at",
         "ended_at",
         "codex_thread_id",
+        "replaced_thread_id",
+        "context_revision",
+        "handoff_id",
+        "requested_thread_policy",
+        "applied_thread_action",
+        "context_consumed",
     ]
     for key in required:
         if key not in data:
             errors.append(f"missing run field: {key}")
-    if data.get("schema_version") != 1:
-        errors.append("schema_version must be 1")
+    if data.get("schema_version") != 2:
+        errors.append("schema_version must be 2")
     if data.get("status") not in RUN_STATUSES:
         errors.append("status must be completed or failed")
     if data.get("status") == "completed":
@@ -165,6 +213,20 @@ def validate_run_record(data: dict[str, Any]) -> list[str]:
         ]:
             if key not in data:
                 errors.append(f"missing completed run field: {key}")
+        if data.get("context_consumed") is not True:
+            errors.append("completed runs must consume context")
+    elif data.get("context_consumed") is not False:
+        errors.append("failed runs must not consume context")
+    if not _non_negative_int(data.get("context_revision")) or data.get(
+        "context_revision"
+    ) < 1:
+        errors.append("context_revision must be a positive integer")
+    if not isinstance(data.get("handoff_id"), str) or not data.get("handoff_id"):
+        errors.append("handoff_id must be a non-empty string")
+    if data.get("requested_thread_policy") not in THREAD_POLICIES:
+        errors.append("requested_thread_policy must be resume or replace")
+    if data.get("applied_thread_action") not in THREAD_ACTIONS:
+        errors.append("applied_thread_action is invalid")
     closeout = data.get("closeout_validation")
     if closeout is not None:
         if not isinstance(closeout, dict):

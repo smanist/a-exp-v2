@@ -14,7 +14,15 @@ a-exp run-once
 `init` creates only workspace infrastructure. Use the generated `project`
 skill, or create the documented files directly, to add a study in `shaping`.
 Interactive Codex sessions and humans steer by editing and committing study
-files. A committed `state: ready` in `STATE.yaml` is the scheduling handoff.
+files. Layout 3 requires committed `CONTEXT.yaml` and append-only handoffs.
+After GPU work, use read-only `$reconcile`; explicitly invoke
+`$handoff-continue` for the unchanged goal or `$handoff-change` for a changed
+goal. The handoff skill commits `state: ready` and returns ownership to the GPU.
+
+Material computations performed interactively through Remote Project use the
+same experiment records as autonomous work, with `producer: interactive`
+instead of `producer: autonomous`. Handoffs reference the evidence; only the
+runner writes session records.
 
 ## Scheduler Contract
 
@@ -38,12 +46,14 @@ Each machine is independent. Host capabilities come from
 - [Configuration](docs/schemas/config.md)
 - [Status JSON](docs/schemas/status-json.md)
 - [Run and Session Records](docs/schemas/run-record.md)
+- [Interactive Context and Handoffs](docs/schemas/context-handoff.md)
 
 ## Opt-in Real Codex Smoke Test
 
 Normal tests use fake Codex processes. To verify the installed CLI, JSONL and
-schema output, explicit sandbox/approval overrides, foreground process waiting,
-and thread resumption against a real account, run:
+schema output, foreground process waiting, committed interactive evidence,
+continuation resume, and one major-change replacement against a real account,
+run:
 
 ```bash
 python scripts/smoke_real_codex.py --foreground-seconds 65

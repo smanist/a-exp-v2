@@ -1,11 +1,13 @@
 # Study Schema
 
-A valid study has `projects/<study>/README.md`, `GOAL.md`, and `STATE.yaml`.
+A valid study has `projects/<study>/README.md`, `GOAL.md`, `STATE.yaml`,
+`CONTEXT.yaml`, and `handoffs/`.
 
 `GOAL.md` defines the objective, evidence criteria, autonomy envelope, and stop
 conditions. `README.md` orients the environment. Optional `PLAN.md`,
 `DECISIONS.md`, and `STEERING.md` hold evolving strategy and instructions.
-Study files and the optional `sessions/` and `experiments/` directories must be
+Study files and the `handoffs/` and optional `sessions/` and `experiments/`
+directories must be
 regular repository entries, not symlinks. Scheduler-owned runtime directories
 under `.a-exp/` follow the same rule.
 

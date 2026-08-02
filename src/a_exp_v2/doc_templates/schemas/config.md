@@ -6,7 +6,7 @@ Study IDs are safe single-component slugs: they start with an ASCII letter or
 digit and contain only ASCII letters, digits, `.`, `_`, or `-`.
 
 ```yaml
-layout_version: 2
+layout_version: 3
 defaults:
   model: null
   max_run_duration_ms: 43200000

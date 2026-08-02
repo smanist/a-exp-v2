@@ -30,7 +30,9 @@
 
 Each item includes study ID, configured and effective state, enablement,
 priority, eligibility and reason, `ready_after`, active run ID, last-run time,
-run count, and consecutive failures.
+run count, consecutive failures, current and consumed context revisions,
+pending-handoff status, latest handoff, requested thread policy, last applied
+thread action, and the superseded thread ID.
 
 Health is `degraded` when study/config validation fails, recovery is ambiguous,
 or an idle workspace is dirty. Ineligible means required host capabilities are

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Reconcile Study"
+  short_description: "Compare GPU work with the interactive evidence baseline"
+  default_prompt: "Use $reconcile to compare autonomous work since the latest handoff and recommend the next handoff."
+policy:
+  allow_implicit_invocation: true

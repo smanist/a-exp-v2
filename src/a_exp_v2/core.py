@@ -43,6 +43,16 @@ OUTPUT_DIR = Path(".a-exp/output")
 RECOVERY_DIR = Path(".a-exp/recovery")
 LOCK_PATH = Path(".a-exp/workspace.lock")
 RUNTIME_DIRS = (RUNS_DIR, LOGS_DIR, RUNNING_DIR, THREADS_DIR, OUTPUT_DIR, RECOVERY_DIR)
+CONTEXT_FILENAME = "CONTEXT.yaml"
+HANDOFFS_DIRNAME = "handoffs"
+MAX_HANDOFF_BYTES = 64 * 1024
+HANDOFF_CHANGE_CLASSES = {"initial", "continuation", "major_change"}
+THREAD_POLICIES = {"resume", "replace"}
+THREAD_ACTIONS = {"new", "resume", "replace", "resume_fallback"}
+EXPERIMENT_PRODUCERS = {"interactive", "autonomous"}
+HANDOFF_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 
 DURABLE_STATES = {
     "shaping",
@@ -74,6 +84,34 @@ STATE_KEYS = {
     "last_run_id",
     "consecutive_failures",
 }
+CONTEXT_KEYS = {"schema_version", "revision", "latest_handoff"}
+HANDOFF_KEYS = {
+    "schema_version",
+    "handoff_id",
+    "study",
+    "created_at",
+    "context_revision",
+    "previous_handoff",
+    "source_commit",
+    "based_on_run_id",
+    "change_class",
+    "thread_policy",
+    "goal_sha256",
+    "steering_sha256",
+    "summary",
+    "decisions",
+    "constraints",
+    "retained_evidence",
+    "superseded_assumptions",
+    "rejected_alternatives",
+    "next_direction",
+    "open_questions",
+    "relevant_paths",
+    "interactive_experiments",
+    "interactive_commits",
+    "artifacts",
+    "source_thread_id",
+}
 
 
 class AExpError(Exception):
@@ -102,10 +140,49 @@ class StudyState:
 
 
 @dataclass(frozen=True)
+class StudyContext:
+    revision: int
+    latest_handoff: str | None
+    schema_version: int = 1
+
+
+@dataclass(frozen=True)
+class Handoff:
+    handoff_id: str
+    study: str
+    created_at: str
+    context_revision: int
+    previous_handoff: str | None
+    source_commit: str
+    based_on_run_id: str | None
+    change_class: str
+    thread_policy: str
+    goal_sha256: str
+    steering_sha256: str | None
+    summary: str
+    decisions: list[str]
+    constraints: list[str]
+    retained_evidence: list[str]
+    superseded_assumptions: list[str]
+    rejected_alternatives: list[str]
+    next_direction: str | None
+    open_questions: list[str]
+    relevant_paths: list[str]
+    interactive_experiments: list[str]
+    interactive_commits: list[str]
+    artifacts: list[str]
+    source_thread_id: str | None
+    path: str
+    schema_version: int = 1
+
+
+@dataclass(frozen=True)
 class Study:
     project: str
     path: Path
     state_data: StudyState
+    context_data: StudyContext
+    handoff_data: Handoff | None
     enabled: bool
     priority: int
     model: str | None
@@ -208,7 +285,7 @@ def init_workspace(root: Path) -> list[Path]:
 
     files = {
         runtime_file_path(root, CONFIG_PATH): default_config_text(),
-        runtime_file_path(root, Path(".a-exp/kit.lock.yaml")): "source: local\nversion: 0.2.0\n",
+        runtime_file_path(root, Path(".a-exp/kit.lock.yaml")): "source: local\nversion: 0.3.0\n",
         root / ".gitignore": default_gitignore_text(),
         root / "AGENTS.md": default_agents_text(),
         root / "modules/registry.yaml": "entries: []\n",
@@ -442,6 +519,10 @@ def symlink_package_tree(root: Path, package_subdir: str, destination: str) -> P
     dest = root / destination
     if source is None or os.path.lexists(dest):
         return None
+    try:
+        source.relative_to(root.resolve())
+    except ValueError:
+        return None
     dest.parent.mkdir(parents=True, exist_ok=True)
     target = relative_symlink_target(dest.parent, source)
     if target is None:
@@ -545,6 +626,8 @@ This repository is an a-exp-v2 study workspace.
 - `projects/<study>/README.md`: environment and orientation.
 - `projects/<study>/GOAL.md`: objective, evidence, autonomy, and stop criteria.
 - `projects/<study>/STATE.yaml`: scheduler-owned durable lifecycle state.
+- `projects/<study>/CONTEXT.yaml` and `handoffs/`: interactive context revision
+  and append-only ownership handoffs.
 - `projects/<study>/PLAN.md` and `DECISIONS.md`: evolving strategy and decisions.
 - `projects/<study>/experiments/`: experiment manifests, progress, results, and findings.
 - `projects/<study>/sessions/`: committed autonomous-run closeouts.
@@ -559,8 +642,15 @@ commit each material checkpoint, and finish with the required structured
 closeout. Do not edit `STATE.yaml` during an autonomous run; a-exp owns the
 state transition after validating closeout.
 
-Interactive shaping may update and commit project files directly. Set
-`state: ready` in `STATE.yaml` only when the study is ready for autonomous work.
+Interactive shaping may update and commit project files directly. Material
+Remote Project computations use experiment records with `producer: interactive`.
+After GPU work use `$reconcile`; return control with explicit
+`$handoff-continue` or `$handoff-change`. Only those handoff skills advance
+context and set `state: ready`.
+
+Autonomous GPU experiments declare `producer: autonomous`. During autonomous
+work do not edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`, `handoffs/`,
+`STATE.yaml`, or `sessions/`.
 
 For experiment-heavy work, check `protocols/registry.yaml`, follow any matching
 playbook and checklist, and record the protocol id in experiment memory.
@@ -639,6 +729,399 @@ def string_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"{field_name} must be a list of non-empty strings")
     return [item.strip() for item in value]
+
+
+def optional_string(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string or null")
+    return value.strip()
+
+
+def load_study_context(path: Path) -> StudyContext:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(raw, dict):
+        raise ValueError("CONTEXT.yaml root must be an object")
+    unknown = sorted(set(raw) - CONTEXT_KEYS)
+    missing = sorted(CONTEXT_KEYS - set(raw))
+    if unknown:
+        raise ValueError(f"unknown field(s): {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"missing field(s): {', '.join(missing)}")
+    if raw.get("schema_version") != 1:
+        raise ValueError("schema_version must be 1")
+    revision = raw.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise ValueError("revision must be a non-negative integer")
+    latest_handoff = optional_string(raw.get("latest_handoff"), "latest_handoff")
+    if revision == 0 and latest_handoff is not None:
+        raise ValueError("revision 0 must not name a latest_handoff")
+    if revision > 0 and latest_handoff is None:
+        raise ValueError("revision greater than 0 requires latest_handoff")
+    if latest_handoff is not None and not HANDOFF_ID_PATTERN.fullmatch(latest_handoff):
+        raise ValueError("latest_handoff is not a safe handoff ID")
+    return StudyContext(revision=revision, latest_handoff=latest_handoff)
+
+
+def write_study_context(path: Path, context: StudyContext) -> None:
+    if context.schema_version != 1:
+        raise ValueError("schema_version must be 1")
+    if (
+        isinstance(context.revision, bool)
+        or not isinstance(context.revision, int)
+        or context.revision < 0
+    ):
+        raise ValueError("revision must be a non-negative integer")
+    if context.revision == 0 and context.latest_handoff is not None:
+        raise ValueError("revision 0 must not name a latest_handoff")
+    if context.revision > 0 and (
+        not isinstance(context.latest_handoff, str)
+        or not HANDOFF_ID_PATTERN.fullmatch(context.latest_handoff)
+    ):
+        raise ValueError("positive revision requires a safe latest_handoff ID")
+    data = {
+        "schema_version": 1,
+        "revision": context.revision,
+        "latest_handoff": context.latest_handoff,
+    }
+    atomic_write_text(path, yaml.safe_dump(data, sort_keys=False))
+
+
+def handoff_record_path(root: Path, study_path_value: Path, handoff_id: str) -> Path:
+    if not HANDOFF_ID_PATTERN.fullmatch(handoff_id):
+        raise WorkspaceError(f"Invalid handoff ID: {handoff_id!r}")
+    directory = study_directory_path(root, study_path_value, HANDOFFS_DIRNAME)
+    return safe_file(
+        root,
+        directory / f"{handoff_id}.yaml",
+        f"handoff record {study_path_value.name}/{handoff_id}",
+        within=directory,
+    )
+
+
+def _validate_handoff_text(raw_text: str) -> None:
+    if len(raw_text.encode("utf-8")) > MAX_HANDOFF_BYTES:
+        raise ValueError(f"handoff record exceeds {MAX_HANDOFF_BYTES} bytes")
+    lowered = raw_text.lower()
+    secret_patterns = (
+        r"-----begin (?:rsa |ec |openssh )?private key-----",
+        r"\b(?:api[_ -]?key|access[_ -]?token|client[_ -]?secret)\s*[:=]\s*[^\s]{8,}",
+        r"\bbearer\s+[a-z0-9._~+/-]{12,}",
+        r"\bsk-[a-z0-9_-]{12,}",
+    )
+    if any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in secret_patterns):
+        raise ValueError("handoff record appears to contain a secret")
+    transcript_markers = ("raw_transcript:", "transcript:", "messages:", "event_log:")
+    if any(marker in lowered for marker in transcript_markers):
+        raise ValueError("handoff records must not contain raw transcripts or embedded logs")
+    role_lines = re.findall(
+        r"(?im)^\s*(?:[-|>]\s*)?(?:user|assistant|system|developer)\s*:",
+        raw_text,
+    )
+    json_log_lines = re.findall(r"(?m)^\s*[-|>]?[ \t]*\{.*\}\s*$", raw_text)
+    if len(role_lines) >= 2 or len(json_log_lines) >= 3:
+        raise ValueError("handoff records must not contain raw transcripts or embedded logs")
+
+
+def _handoff_path_list(
+    root: Path,
+    values: Any,
+    field_name: str,
+) -> list[str]:
+    result = string_list(values, field_name)
+    normalized: list[str] = []
+    for value in result:
+        try:
+            normalized.append(safe_repo_path(root, value))
+        except WorkspaceError as exc:
+            raise ValueError(str(exc)) from exc
+    return normalized
+
+
+def load_handoff_record(root: Path, study_path_value: Path, path: Path) -> Handoff:
+    directory = study_directory_path(root, study_path_value, HANDOFFS_DIRNAME)
+    try:
+        record_path = safe_file(
+            root,
+            path,
+            f"handoff record for {study_path_value.name}",
+            within=directory,
+        )
+        if record_path.stat().st_size > MAX_HANDOFF_BYTES:
+            raise ValueError(f"handoff record exceeds {MAX_HANDOFF_BYTES} bytes")
+        raw_text = record_path.read_text(encoding="utf-8")
+    except (OSError, WorkspaceError) as exc:
+        raise ValueError(str(exc)) from exc
+    _validate_handoff_text(raw_text)
+    try:
+        raw = yaml.safe_load(raw_text) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(raw, dict):
+        raise ValueError("handoff root must be an object")
+    unknown = sorted(set(raw) - HANDOFF_KEYS)
+    missing = sorted(HANDOFF_KEYS - set(raw))
+    if unknown:
+        raise ValueError(f"unknown field(s): {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"missing field(s): {', '.join(missing)}")
+    if raw.get("schema_version") != 1:
+        raise ValueError("schema_version must be 1")
+    handoff_id = raw.get("handoff_id")
+    if not isinstance(handoff_id, str) or not HANDOFF_ID_PATTERN.fullmatch(handoff_id):
+        raise ValueError("handoff_id must be a safe non-empty ID")
+    if record_path.name != f"{handoff_id}.yaml":
+        raise ValueError("handoff filename must match handoff_id")
+    study = raw.get("study")
+    if study != study_path_value.name:
+        raise ValueError(f"study must be {study_path_value.name!r}")
+    created_at = raw.get("created_at")
+    if isinstance(created_at, datetime):
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if not isinstance(created_at, str) or parse_timestamp(created_at) is None:
+        raise ValueError("created_at must be an ISO timestamp")
+    revision = raw.get("context_revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("context_revision must be a positive integer")
+    previous = optional_string(raw.get("previous_handoff"), "previous_handoff")
+    if previous is not None and not HANDOFF_ID_PATTERN.fullmatch(previous):
+        raise ValueError("previous_handoff is not a safe handoff ID")
+    source_commit = raw.get("source_commit")
+    if not isinstance(source_commit, str) or not COMMIT_PATTERN.fullmatch(source_commit):
+        raise ValueError("source_commit must be a full Git object ID")
+    based_on_run_id = optional_string(raw.get("based_on_run_id"), "based_on_run_id")
+    change_class = raw.get("change_class")
+    if change_class not in HANDOFF_CHANGE_CLASSES:
+        raise ValueError("change_class must be initial, continuation, or major_change")
+    thread_policy = raw.get("thread_policy")
+    if thread_policy not in THREAD_POLICIES:
+        raise ValueError("thread_policy must be resume or replace")
+    goal_sha256 = raw.get("goal_sha256")
+    if not isinstance(goal_sha256, str) or not SHA256_PATTERN.fullmatch(goal_sha256):
+        raise ValueError("goal_sha256 must be a lowercase SHA-256 digest")
+    steering_sha256 = optional_string(raw.get("steering_sha256"), "steering_sha256")
+    if steering_sha256 is not None and not SHA256_PATTERN.fullmatch(steering_sha256):
+        raise ValueError("steering_sha256 must be a lowercase SHA-256 digest or null")
+    summary = raw.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("summary must be a non-empty string")
+    next_direction = optional_string(raw.get("next_direction"), "next_direction")
+    source_thread_id = optional_string(raw.get("source_thread_id"), "source_thread_id")
+    interactive_commits = string_list(raw.get("interactive_commits"), "interactive_commits")
+    if any(not COMMIT_PATTERN.fullmatch(value) for value in interactive_commits):
+        raise ValueError("interactive_commits entries must be full Git object IDs")
+    return Handoff(
+        handoff_id=handoff_id,
+        study=study,
+        created_at=created_at,
+        context_revision=revision,
+        previous_handoff=previous,
+        source_commit=source_commit,
+        based_on_run_id=based_on_run_id,
+        change_class=change_class,
+        thread_policy=thread_policy,
+        goal_sha256=goal_sha256,
+        steering_sha256=steering_sha256,
+        summary=summary.strip(),
+        decisions=string_list(raw.get("decisions"), "decisions"),
+        constraints=string_list(raw.get("constraints"), "constraints"),
+        retained_evidence=string_list(raw.get("retained_evidence"), "retained_evidence"),
+        superseded_assumptions=string_list(
+            raw.get("superseded_assumptions"), "superseded_assumptions"
+        ),
+        rejected_alternatives=string_list(
+            raw.get("rejected_alternatives"), "rejected_alternatives"
+        ),
+        next_direction=next_direction,
+        open_questions=string_list(raw.get("open_questions"), "open_questions"),
+        relevant_paths=_handoff_path_list(root, raw.get("relevant_paths"), "relevant_paths"),
+        interactive_experiments=string_list(
+            raw.get("interactive_experiments"), "interactive_experiments"
+        ),
+        interactive_commits=interactive_commits,
+        artifacts=_handoff_path_list(root, raw.get("artifacts"), "artifacts"),
+        source_thread_id=source_thread_id,
+        path=record_path.relative_to(root).as_posix(),
+    )
+
+
+def handoff_record_data(handoff: Handoff) -> dict[str, Any]:
+    return {
+        "schema_version": handoff.schema_version,
+        "handoff_id": handoff.handoff_id,
+        "study": handoff.study,
+        "created_at": handoff.created_at,
+        "context_revision": handoff.context_revision,
+        "previous_handoff": handoff.previous_handoff,
+        "source_commit": handoff.source_commit,
+        "based_on_run_id": handoff.based_on_run_id,
+        "change_class": handoff.change_class,
+        "thread_policy": handoff.thread_policy,
+        "goal_sha256": handoff.goal_sha256,
+        "steering_sha256": handoff.steering_sha256,
+        "summary": handoff.summary,
+        "decisions": handoff.decisions,
+        "constraints": handoff.constraints,
+        "retained_evidence": handoff.retained_evidence,
+        "superseded_assumptions": handoff.superseded_assumptions,
+        "rejected_alternatives": handoff.rejected_alternatives,
+        "next_direction": handoff.next_direction,
+        "open_questions": handoff.open_questions,
+        "relevant_paths": handoff.relevant_paths,
+        "interactive_experiments": handoff.interactive_experiments,
+        "interactive_commits": handoff.interactive_commits,
+        "artifacts": handoff.artifacts,
+        "source_thread_id": handoff.source_thread_id,
+    }
+
+
+def write_handoff_record(root: Path, study_path_value: Path, handoff: Handoff) -> Path:
+    directory = study_directory_path(
+        root, study_path_value, HANDOFFS_DIRNAME, create=True
+    )
+    path = safe_file(
+        root,
+        directory / f"{handoff.handoff_id}.yaml",
+        f"handoff record {study_path_value.name}/{handoff.handoff_id}",
+        within=directory,
+    )
+    if os.path.lexists(path):
+        raise WorkspaceError(f"handoff records are append-only: {path.relative_to(root)}")
+    text_value = yaml.safe_dump(handoff_record_data(handoff), sort_keys=False)
+    _validate_handoff_text(text_value)
+    atomic_write_text(path, text_value)
+    try:
+        load_handoff_record(root, study_path_value, path)
+    except ValueError:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def load_handoff_chain(
+    root: Path,
+    study_path_value: Path,
+    context: StudyContext,
+) -> tuple[Handoff | None, list[Handoff]]:
+    directory = study_directory_path(root, study_path_value, HANDOFFS_DIRNAME)
+    for entry in directory.iterdir() if directory.exists() else []:
+        if entry.name == ".gitkeep":
+            if entry.is_symlink() or not entry.is_file():
+                raise ValueError("handoffs/.gitkeep must be a regular file")
+            continue
+        if entry.suffix != ".yaml" or entry.is_dir():
+            raise ValueError(
+                f"unexpected entry in handoffs directory: {entry.name}"
+            )
+    record_paths = sorted(directory.glob("*.yaml"))
+    if context.revision == 0:
+        if record_paths:
+            raise ValueError("revision 0 must have an empty handoffs directory")
+        return None, []
+    records: dict[str, Handoff] = {}
+    for path in record_paths:
+        record = load_handoff_record(root, study_path_value, path)
+        if record.handoff_id in records:
+            raise ValueError(f"duplicate handoff_id: {record.handoff_id}")
+        records[record.handoff_id] = record
+    assert context.latest_handoff is not None
+    latest = records.get(context.latest_handoff)
+    if latest is None:
+        raise ValueError(f"latest_handoff {context.latest_handoff!r} does not exist")
+    chain: list[Handoff] = []
+    current: Handoff | None = latest
+    seen: set[str] = set()
+    expected_revision = context.revision
+    while current is not None:
+        if current.handoff_id in seen:
+            raise ValueError("handoff chain contains a cycle")
+        seen.add(current.handoff_id)
+        if current.context_revision != expected_revision:
+            raise ValueError("handoff revisions must form a contiguous descending chain")
+        chain.append(current)
+        if current.previous_handoff is None:
+            current = None
+        else:
+            current = records.get(current.previous_handoff)
+            if current is None:
+                raise ValueError("previous_handoff does not exist")
+        expected_revision -= 1
+    if expected_revision != 0:
+        raise ValueError("handoff chain does not reach revision 1")
+    if set(records) != seen:
+        raise ValueError("handoffs directory contains records outside the active revision chain")
+    ordered = list(reversed(chain))
+    for index, record in enumerate(ordered):
+        previous_record = ordered[index - 1] if index else None
+        if index == 0:
+            if record.change_class != "initial" or record.thread_policy != "resume":
+                raise ValueError("revision 1 must be initial with resume policy")
+            if record.previous_handoff is not None:
+                raise ValueError("initial handoff must not have previous_handoff")
+        elif record.change_class == "continuation":
+            assert previous_record is not None
+            if parse_timestamp(record.created_at) < parse_timestamp(previous_record.created_at):
+                raise ValueError("handoff created_at timestamps must be nondecreasing")
+            if record.thread_policy != "resume":
+                raise ValueError("continuation handoffs require resume policy")
+            if record.goal_sha256 != previous_record.goal_sha256:
+                raise ValueError("continuation handoff requires an unchanged GOAL.md hash")
+        elif record.change_class == "major_change":
+            assert previous_record is not None
+            if parse_timestamp(record.created_at) < parse_timestamp(previous_record.created_at):
+                raise ValueError("handoff created_at timestamps must be nondecreasing")
+            if record.thread_policy != "replace":
+                raise ValueError("major_change handoffs require replace policy")
+            if record.goal_sha256 == previous_record.goal_sha256:
+                raise ValueError("major_change handoff requires a changed GOAL.md hash")
+            if not record.superseded_assumptions:
+                raise ValueError("major_change handoff requires superseded_assumptions")
+        else:
+            raise ValueError("only revision 1 may use change_class initial")
+    if latest.context_revision != context.revision:
+        raise ValueError("latest handoff revision does not match CONTEXT.yaml")
+    goal_path = study_file_path(root, study_path_value, "GOAL.md")
+    if content_hash(goal_path) != latest.goal_sha256:
+        raise ValueError("latest handoff goal_sha256 does not match GOAL.md")
+    steering_path = study_path_value / "STEERING.md"
+    current_steering_hash = (
+        content_hash(study_file_path(root, study_path_value, "STEERING.md"))
+        if os.path.lexists(steering_path)
+        else None
+    )
+    if current_steering_hash != latest.steering_sha256:
+        raise ValueError("latest handoff steering_sha256 does not match STEERING.md")
+    return latest, ordered
+
+
+def experiment_producer(path: Path) -> str:
+    try:
+        text_value = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    lines = text_value.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("EXPERIMENT.md must begin with YAML frontmatter")
+    try:
+        end = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration as exc:
+        raise ValueError("EXPERIMENT.md frontmatter is not terminated") from exc
+    try:
+        frontmatter = yaml.safe_load("\n".join(lines[1:end])) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid EXPERIMENT.md frontmatter: {exc}") from exc
+    if not isinstance(frontmatter, dict):
+        raise ValueError("EXPERIMENT.md frontmatter must be an object")
+    producer = frontmatter.get("producer")
+    if producer not in EXPERIMENT_PRODUCERS:
+        raise ValueError("EXPERIMENT.md frontmatter producer must be interactive or autonomous")
+    return producer
 
 
 def write_study_state(path: Path, state: StudyState) -> None:
@@ -853,6 +1336,8 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                     project=name,
                     path=path,
                     state_data=default_invalid_state(),
+                    context_data=default_invalid_context(),
+                    handoff_data=None,
                     enabled=project_config.enabled is not False,
                     priority=project_config.priority,
                     model=None,
@@ -872,7 +1357,10 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
         required: list[Path] = []
         invalid_reason: str | None = None
         try:
-            required = [study_file_path(root, path, name) for name in ("README.md", "GOAL.md", "STATE.yaml")]
+            required = [
+                study_file_path(root, path, filename)
+                for filename in ("README.md", "GOAL.md", "STATE.yaml", CONTEXT_FILENAME)
+            ]
             missing = [str(item.relative_to(root)) for item in required if not item.is_file()]
             if missing:
                 invalid_reason = f"Missing {', '.join(missing)}"
@@ -880,18 +1368,46 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                 candidate = path / filename
                 if os.path.lexists(candidate):
                     study_file_path(root, path, filename)
+            handoffs_candidate = path / HANDOFFS_DIRNAME
+            if not handoffs_candidate.is_dir():
+                invalid_reason = invalid_reason or f"Missing {handoffs_candidate.relative_to(root)}"
+            else:
+                study_directory_path(root, path, HANDOFFS_DIRNAME)
             for dirname in ("sessions", "experiments"):
                 candidate = path / dirname
                 if os.path.lexists(candidate):
                     directory = study_directory_path(root, path, dirname)
                     if dirname == "sessions":
                         for record_path in directory.glob("*.yaml"):
-                            safe_file(
+                            validated_record_path = safe_file(
                                 root,
                                 record_path,
                                 f"session record for {name}",
                                 within=directory,
                             )
+                            try:
+                                record_data = (
+                                    yaml.safe_load(
+                                        validated_record_path.read_text(encoding="utf-8")
+                                    )
+                                    or {}
+                                )
+                            except (OSError, yaml.YAMLError) as exc:
+                                raise ValueError(
+                                    f"{validated_record_path.relative_to(root)}: {exc}"
+                                ) from exc
+                            if not isinstance(record_data, dict):
+                                raise ValueError(
+                                    f"{validated_record_path.relative_to(root)}: root must be an object"
+                                )
+                            from .validators import validate_run_record
+
+                            record_errors = validate_run_record(record_data)
+                            if record_errors:
+                                raise ValueError(
+                                    f"{validated_record_path.relative_to(root)}: "
+                                    + "; ".join(record_errors)
+                                )
                     else:
                         for pattern in ("*/EXPERIMENT.md", "*/progress.json"):
                             for experiment_path in directory.glob(pattern):
@@ -903,14 +1419,55 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                                 )
             valid = invalid_reason is None
             state_data = load_study_state(required[2]) if valid else default_invalid_state()
+            context_data = (
+                load_study_context(required[3]) if valid else default_invalid_context()
+            )
+            handoff_data: Handoff | None = None
+            if valid:
+                handoff_data, _ = load_handoff_chain(root, path, context_data)
+                if context_data.revision == 0 and state_data.state != "shaping":
+                    raise ValueError("revision 0 is valid only while state is shaping")
+                if state_data.state == "ready" and context_data.revision < 1:
+                    raise ValueError("ready studies require context revision at least 1")
+                experiments_directory = study_directory_path(root, path, "experiments")
+                for experiment_path in sorted(experiments_directory.glob("*/EXPERIMENT.md")):
+                    try:
+                        experiment_producer(experiment_path)
+                    except ValueError as exc:
+                        relative = experiment_path.relative_to(root)
+                        raise ValueError(f"{relative}: {exc}") from exc
+                if handoff_data is not None:
+                    for experiment_id in handoff_data.interactive_experiments:
+                        try:
+                            validate_project_id(experiment_id)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"invalid interactive experiment ID {experiment_id!r}: {exc}"
+                            ) from exc
+                        record_path = experiments_directory / experiment_id / "EXPERIMENT.md"
+                        if not record_path.is_file():
+                            raise ValueError(
+                                f"interactive experiment {experiment_id!r} has no EXPERIMENT.md"
+                            )
+                        if experiment_producer(record_path) != "interactive":
+                            raise ValueError(
+                                f"handoff experiment {experiment_id!r} must declare producer: interactive"
+                            )
+                stale_reason = stale_ready_reason(root, name, state_data, context_data)
+                if stale_reason:
+                    raise ValueError(stale_reason)
         except WorkspaceError as exc:
             valid = False
             invalid_reason = f"Invalid projects/{name}: {exc}"
             state_data = default_invalid_state()
+            context_data = default_invalid_context()
+            handoff_data = None
         except ValueError as exc:
             valid = False
-            invalid_reason = f"Invalid projects/{name}/STATE.yaml: {exc}"
+            invalid_reason = f"Invalid projects/{name}: {exc}"
             state_data = default_invalid_state()
+            context_data = default_invalid_context()
+            handoff_data = None
         if invalid_reason:
             issues.append(invalid_reason)
         missing_capabilities = sorted(set(state_data.requires) - capabilities)
@@ -920,6 +1477,8 @@ def discover_studies(root: Path) -> tuple[list[Study], list[str]]:
                 project=name,
                 path=path,
                 state_data=state_data,
+                context_data=context_data,
+                handoff_data=handoff_data,
                 enabled=project_config.enabled is not False,
                 priority=project_config.priority,
                 model=project_value(config, project_config, "model", DEFAULT_MODEL),
@@ -985,13 +1544,46 @@ def default_invalid_state() -> StudyState:
     )
 
 
+def default_invalid_context() -> StudyContext:
+    return StudyContext(revision=0, latest_handoff=None)
+
+
+def stale_ready_reason(
+    root: Path,
+    project: str,
+    state: StudyState,
+    context: StudyContext,
+) -> str | None:
+    if state.state != "ready":
+        return None
+    records = session_records(root, project)
+    if not records:
+        return None
+    last = records[-1]
+    if last.get("next_state") == "ready":
+        return None
+    last_revision = last.get("context_revision")
+    if isinstance(last_revision, bool) or not isinstance(last_revision, int):
+        return "session records must use schema version 2 with context_revision"
+    if context.revision <= last_revision:
+        return (
+            "stale interactive ready transition: advance CONTEXT.yaml after a "
+            "non-ready autonomous session"
+        )
+    return None
+
+
 def set_project_enabled(root: Path, project: str, enabled: bool) -> None:
     path = study_path(root, project)
-    for filename in ("README.md", "GOAL.md", "STATE.yaml"):
+    for filename in ("README.md", "GOAL.md", "STATE.yaml", CONTEXT_FILENAME):
         if not study_file_path(root, path, filename).is_file():
             raise WorkspaceError(f"Project is not a valid study: projects/{project}")
+    if not (path / HANDOFFS_DIRNAME).is_dir():
+        raise WorkspaceError(f"Project is not a valid study: projects/{project}")
     try:
         load_study_state(study_file_path(root, path, "STATE.yaml"))
+        context = load_study_context(study_file_path(root, path, CONTEXT_FILENAME))
+        load_handoff_chain(root, path, context)
     except ValueError as exc:
         raise WorkspaceError(f"Project is not a valid study: projects/{project}: {exc}") from exc
     config_path = runtime_file_path(root, CONFIG_PATH)
@@ -1053,7 +1645,19 @@ def status_json(root: Path) -> dict[str, Any]:
         issues.append("Workspace has uncommitted changes")
     items: list[dict[str, Any]] = []
     for study in studies:
-        last = last_run_at(root, study.project) if study.valid else None
+        records = session_records(root, study.project) if study.valid else []
+        last = last_run_at_from_records(records)
+        consumed_revision = consumed_context_revision(records)
+        last_record = records[-1] if records else {}
+        superseded_thread_id = next(
+            (
+                record.get("replaced_thread_id")
+                for record in reversed(records)
+                if isinstance(record.get("replaced_thread_id"), str)
+                and record.get("replaced_thread_id")
+            ),
+            None,
+        )
         items.append(
             {
                 "id": study.project,
@@ -1069,8 +1673,17 @@ def status_json(root: Path) -> dict[str, Any]:
                 "ineligible_reason": study.ineligible_reason,
                 "ready_after": study.state_data.ready_after,
                 "last_run_at": last,
-                "run_count": run_count(root, study.project) if study.valid else 0,
+                "run_count": len(records),
                 "consecutive_failures": study.state_data.consecutive_failures,
+                "context_revision": study.context_data.revision,
+                "consumed_context_revision": consumed_revision,
+                "context_pending": study.context_data.revision > consumed_revision,
+                "latest_handoff": study.context_data.latest_handoff,
+                "requested_thread_policy": (
+                    study.handoff_data.thread_policy if study.handoff_data else None
+                ),
+                "last_thread_action": last_record.get("applied_thread_action"),
+                "superseded_thread_id": superseded_thread_id,
             }
         )
     counts = {state: 0 for state in EFFECTIVE_STATES}
@@ -1119,7 +1732,8 @@ def format_status(data: dict[str, Any]) -> str:
         reason = f" ({item['ineligible_reason']})" if item["ineligible_reason"] else ""
         lines.append(
             f"  {item['id']}\t{item['state']}{reason}\tpriority={item['priority']}\t"
-            f"last={last}\truns={item['run_count']}\tfailures={item['consecutive_failures']}"
+            f"last={last}\truns={item['run_count']}\tfailures={item['consecutive_failures']}\t"
+            f"context={item['consumed_context_revision']}/{item['context_revision']}"
         )
     for warning in data.get("warnings", []):
         lines.append(f"Warning: {warning}")
@@ -1127,8 +1741,12 @@ def format_status(data: dict[str, Any]) -> str:
 
 
 def last_run_at(root: Path, project: str) -> str | None:
+    return last_run_at_from_records(session_records(root, project))
+
+
+def last_run_at_from_records(records: list[dict[str, Any]]) -> str | None:
     values: list[datetime] = []
-    for data in session_records(root, project):
+    for data in records:
         value = data.get("started_at")
         if isinstance(value, datetime):
             parsed = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
@@ -1157,20 +1775,59 @@ def session_records(root: Path, project: str) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     path = study_path(root, project)
     directory = study_directory_path(root, path, "sessions")
-    for path in sorted(directory.glob("*.yaml")):
+    prefix = directory.relative_to(root).as_posix()
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", prefix],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        return []
+    for relative in sorted(value for value in listed.stdout.split("\0") if value.endswith(".yaml")):
         try:
-            record_path = safe_file(
-                root,
-                path,
-                f"session record for {project}",
-                within=directory,
+            normalized = safe_repo_path(root, relative)
+            if not normalized.startswith(prefix + "/"):
+                continue
+            shown = subprocess.run(
+                ["git", "-C", str(root), "show", f"HEAD:{normalized}"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            data = yaml.safe_load(record_path.read_text(encoding="utf-8")) or {}
-        except (OSError, WorkspaceError, yaml.YAMLError):
+            if shown.returncode != 0:
+                continue
+            data = yaml.safe_load(shown.stdout) or {}
+        except (WorkspaceError, yaml.YAMLError):
             continue
         if isinstance(data, dict):
             values.append(data)
-    return values
+    return sorted(values, key=session_record_sort_key)
+
+
+def session_record_sort_key(record: dict[str, Any]) -> tuple[datetime, str]:
+    value = record.get("ended_at", record.get("started_at"))
+    if isinstance(value, datetime):
+        parsed = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        parsed = parsed.astimezone(timezone.utc)
+    else:
+        parsed = parse_timestamp(value) if isinstance(value, str) else None
+    return (
+        parsed or datetime.min.replace(tzinfo=timezone.utc),
+        str(record.get("run_id", "")),
+    )
+
+
+def consumed_context_revision(records: list[dict[str, Any]]) -> int:
+    revisions = [
+        record.get("context_revision")
+        for record in records
+        if record.get("status") == "completed"
+        and record.get("context_consumed") is True
+        and isinstance(record.get("context_revision"), int)
+        and not isinstance(record.get("context_revision"), bool)
+    ]
+    return max(revisions, default=0)
 
 
 @contextlib.contextmanager
@@ -1302,39 +1959,88 @@ def thread_record_path(root: Path, project: str) -> Path:
     return runtime_file_path(root, THREADS_DIR / f"{name}.json")
 
 
-def read_thread_id(root: Path, project: str) -> str | None:
+def read_thread_record(root: Path, project: str) -> dict[str, Any] | None:
     path = thread_record_path(root, project)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    value = data.get("thread_id") if isinstance(data, dict) else None
-    return value if isinstance(value, str) and value else None
+    if not isinstance(data, dict) or set(data) != {
+        "schema_version",
+        "thread_id",
+        "context_revision",
+        "last_run_id",
+        "updated_at",
+    }:
+        return None
+    thread_id = data.get("thread_id")
+    revision = data.get("context_revision")
+    if (
+        data.get("schema_version") != 1
+        or not isinstance(thread_id, str)
+        or not thread_id
+        or isinstance(revision, bool)
+        or not isinstance(revision, int)
+        or revision < 1
+    ):
+        return None
+    return data
 
 
-def write_thread_record(root: Path, project: str, thread_id: str, run_id: str) -> None:
+def read_thread_id(root: Path, project: str) -> str | None:
+    record = read_thread_record(root, project)
+    return str(record["thread_id"]) if record else None
+
+
+def write_thread_record(
+    root: Path,
+    project: str,
+    thread_id: str,
+    run_id: str,
+    context_revision: int,
+) -> None:
     atomic_write_json(
         thread_record_path(root, project),
-        {"thread_id": thread_id, "last_run_id": run_id, "updated_at": utc_now()},
+        {
+            "schema_version": 1,
+            "thread_id": thread_id,
+            "context_revision": context_revision,
+            "last_run_id": run_id,
+            "updated_at": utc_now(),
+        },
     )
 
 
 def workflow_prompt(study: Study, run_id: str) -> str:
     steering = study.path / "STEERING.md"
+    handoff = study.handoff_data
+    if handoff is None:
+        raise WorkspaceError("ready study has no validated handoff")
     lines = [
         "Run one a-exp-v2 autonomous study session.",
         f"Study: {study.project}",
         f"Run ID: {run_id}",
+        f"Context revision: {study.context_data.revision}",
+        f"Validated handoff: {handoff.path}",
+        f"Requested thread policy: {handoff.thread_policy}",
         "",
-        "Use the workflow skill if available. Read AGENTS.md, the study README, GOAL.md, STATE.yaml, and any PLAN.md, DECISIONS.md, STEERING.md, prior sessions, experiments, reports, and applicable protocols.",
+        "Use the workflow skill if available. Read AGENTS.md, the study README, GOAL.md, CONTEXT.yaml, the validated latest handoff, STATE.yaml, and any PLAN.md, DECISIONS.md, STEERING.md, prior sessions, experiments, reports, and applicable protocols.",
+        "Precedence is: current committed study files, latest validated handoff, older handoffs and session records, then Codex thread memory. Resolve conflicts in that order.",
+        f"Handoff summary: {handoff.summary}",
+        f"Next direction: {handoff.next_direction or 'not specified'}",
         "Advance the study goal within its autonomy envelope. You may implement code and run multiple coherent foreground experiments. Do not launch unmanaged detached processes.",
-        "Commit after every material experiment or coherent code change. Do not edit STATE.yaml; a-exp owns the state transition after validating your final response.",
+        "Commit after every material experiment or coherent code change. GPU-produced experiment records must declare `producer: autonomous`.",
+        "Do not edit GOAL.md, STEERING.md, CONTEXT.yaml, anything under handoffs/, STATE.yaml, or anything under sessions/. These are interactive- or runner-owned control files.",
         "Use an explicit packet for separately scoped a-dev work rather than adding scheduler work units.",
         "",
         "Your final response must satisfy the supplied JSON schema. Declare every repo path changed during this run, including paths already committed. Request exactly one next state: ready, needs_human, paused, blocked, or completed.",
     ]
     if steering.exists():
         lines.append("STEERING.md is present and must be incorporated before choosing further work.")
+    if handoff.interactive_experiments:
+        lines.append(
+            "Interactive evidence baseline: " + ", ".join(handoff.interactive_experiments)
+        )
     return "\n".join(lines)
 
 
@@ -1409,6 +2115,29 @@ def brief_log_path_for(log_path: Path) -> Path:
     return log_path.with_name(f"{log_path.stem}.brief{log_path.suffix}")
 
 
+def plan_thread_action(
+    study: Study,
+    record: dict[str, Any] | None,
+) -> tuple[str | None, str, str | None]:
+    handoff = study.handoff_data
+    if handoff is None:
+        raise WorkspaceError("ready study has no validated handoff")
+    if record is None:
+        return None, "new", None
+    mapped_revision = int(record["context_revision"])
+    mapped_thread_id = str(record["thread_id"])
+    if mapped_revision > study.context_data.revision:
+        raise WorkspaceError(
+            "machine-local thread mapping is newer than committed CONTEXT.yaml"
+        )
+    if (
+        mapped_revision < study.context_data.revision
+        and handoff.thread_policy == "replace"
+    ):
+        return None, "replace", mapped_thread_id
+    return mapped_thread_id, "resume", None
+
+
 def run_once(root: Path) -> dict[str, Any] | None:
     claim = claim_next_study(root)
     if claim is None:
@@ -1428,13 +2157,20 @@ def run_once(root: Path) -> dict[str, Any] | None:
             if os.path.lexists(steering_path)
             else None
         )
-        previous_thread_id = read_thread_id(root, study.project)
+        prior_thread_record = read_thread_record(root, study.project)
+        previous_thread_id = (
+            str(prior_thread_record["thread_id"]) if prior_thread_record else None
+        )
+        run_thread_id, thread_action, replaced_thread_id = plan_thread_action(
+            study, prior_thread_record
+        )
+        assert study.handoff_data is not None
+        requested_thread_policy = study.handoff_data.thread_policy
         prompt = workflow_prompt(study, run_id)
     except Exception:
         marker_path.unlink(missing_ok=True)
         raise
     result: CodexRunResult | None = None
-    replaced_thread_id: str | None = None
     try:
         try:
             schema_resource = resources.files("a_exp_v2").joinpath("schemas/session-closeout.json")
@@ -1453,10 +2189,11 @@ def run_once(root: Path) -> dict[str, Any] | None:
                     model=study.model,
                     sandbox=study.sandbox,
                     approval_policy=study.approval_policy,
-                    thread_id=previous_thread_id,
+                    thread_id=run_thread_id,
                 )
-                if previous_thread_id and result.returncode != 0 and not result.turn_started:
-                    replaced_thread_id = previous_thread_id
+                if run_thread_id and result.returncode != 0 and not result.turn_started:
+                    replaced_thread_id = run_thread_id
+                    thread_action = "resume_fallback"
                     output_message.unlink(missing_ok=True)
                     result = run_codex(
                         root=root,
@@ -1485,30 +2222,60 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 closeout_error=f"runner exception: {type(exc).__name__}: {exc}",
             )
         assert result is not None
-        thread_id = result.thread_id or (None if replaced_thread_id else previous_thread_id)
-        if thread_id:
-            write_thread_record(root, study.project, thread_id, run_id)
+        thread_id = result.thread_id or run_thread_id or previous_thread_id
+        replacement_attempt = thread_action in {"replace", "resume_fallback"}
+        if result.thread_id:
+            write_thread_record(
+                root,
+                study.project,
+                result.thread_id,
+                run_id,
+                study.context_data.revision,
+            )
+        elif run_thread_id and result.turn_started and not replacement_attempt:
+            write_thread_record(
+                root,
+                study.project,
+                run_thread_id,
+                run_id,
+                study.context_data.revision,
+            )
         errors = validate_closeout(result.closeout)
         if result.closeout_error:
             errors.append(result.closeout_error)
         if result.returncode != 0:
             errors.append(f"codex exited {result.returncode}")
         actual_paths = set(git_changed_paths_since(root, base_commit))
-        scheduler_owned_changes = sorted(
-            path
-            for path in actual_paths
-            if path.startswith(".a-exp/")
-            or (
-                len(Path(path).parts) == 3
-                and Path(path).parts[0] == "projects"
-                and Path(path).name == "STATE.yaml"
-            )
-            or (
-                len(Path(path).parts) >= 4
-                and Path(path).parts[0] == "projects"
-                and Path(path).parts[2] == "sessions"
-            )
-        )
+        for changed_path in sorted(actual_paths):
+            parts = Path(changed_path).parts
+            if (
+                len(parts) == 5
+                and parts[0] == "projects"
+                and parts[1] == study.project
+                and parts[2] == "experiments"
+                and parts[4] == "EXPERIMENT.md"
+            ):
+                try:
+                    producer = experiment_producer(root / changed_path)
+                except ValueError as exc:
+                    errors.append(f"{changed_path}: {exc}")
+                else:
+                    if producer != "autonomous":
+                        errors.append(
+                            f"autonomous run experiment {changed_path} must declare "
+                            "producer: autonomous"
+                        )
+        control_filenames = {"GOAL.md", "STEERING.md", CONTEXT_FILENAME, "STATE.yaml"}
+        scheduler_owned_changes = []
+        for changed_path in actual_paths:
+            parts = Path(changed_path).parts
+            forbidden = changed_path.startswith(".a-exp/")
+            if len(parts) >= 3 and parts[0] == "projects" and parts[1] == study.project:
+                forbidden = forbidden or parts[2] in control_filenames
+                forbidden = forbidden or parts[2] in {HANDOFFS_DIRNAME, "sessions"}
+            if forbidden:
+                scheduler_owned_changes.append(changed_path)
+        scheduler_owned_changes.sort()
         state_changed = bool(scheduler_owned_changes)
         if scheduler_owned_changes:
             errors.append(
@@ -1543,6 +2310,8 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 replaced_thread_id=replaced_thread_id,
                 goal_hash=goal_hash,
                 steering_hash=steering_hash,
+                requested_thread_policy=requested_thread_policy,
+                thread_action=thread_action,
                 errors=errors,
                 unsafe=state_changed,
                 run_path=run_path,
@@ -1566,6 +2335,8 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 replaced_thread_id=replaced_thread_id,
                 goal_hash=goal_hash,
                 steering_hash=steering_hash,
+                requested_thread_policy=requested_thread_policy,
+                thread_action=thread_action,
                 declared=declared,
                 run_path=run_path,
                 log_path=log_path,
@@ -1584,6 +2355,8 @@ def run_once(root: Path) -> dict[str, Any] | None:
                 replaced_thread_id=replaced_thread_id,
                 goal_hash=goal_hash,
                 steering_hash=steering_hash,
+                requested_thread_policy=requested_thread_policy,
+                thread_action=thread_action,
                 errors=[f"closeout failure: {detail}"],
                 unsafe=True,
                 run_path=run_path,
@@ -1611,6 +2384,8 @@ def close_successful_run(
     replaced_thread_id: str | None,
     goal_hash: str | None,
     steering_hash: str | None,
+    requested_thread_policy: str,
+    thread_action: str,
     declared: set[str],
     run_path: Path,
     log_path: Path,
@@ -1639,7 +2414,7 @@ def close_successful_run(
     )
     state_path = study_file_path(root, study.path, "STATE.yaml")
     session_record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "study": study.project,
         "status": "completed",
@@ -1650,6 +2425,11 @@ def close_successful_run(
         "ended_at": ended_at,
         "codex_thread_id": thread_id,
         "replaced_thread_id": replaced_thread_id,
+        "context_revision": study.context_data.revision,
+        "handoff_id": study.context_data.latest_handoff,
+        "requested_thread_policy": requested_thread_policy,
+        "applied_thread_action": thread_action,
+        "context_consumed": True,
         "goal_sha256": goal_hash,
         "steering_sha256": steering_hash,
         "summary": closeout["summary"],
@@ -1713,6 +2493,8 @@ def handle_failed_run(
     replaced_thread_id: str | None,
     goal_hash: str | None,
     steering_hash: str | None,
+    requested_thread_policy: str,
+    thread_action: str,
     errors: list[str],
     unsafe: bool,
     run_path: Path,
@@ -1721,7 +2503,7 @@ def handle_failed_run(
 ) -> dict[str, Any]:
     clean = git_clean(root)
     runtime = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "project": study.project,
         "study": study.project,
@@ -1733,6 +2515,11 @@ def handle_failed_run(
         "ended_at": utc_now(),
         "codex_thread_id": thread_id,
         "replaced_thread_id": replaced_thread_id,
+        "context_revision": study.context_data.revision,
+        "handoff_id": study.context_data.latest_handoff,
+        "requested_thread_policy": requested_thread_policy,
+        "applied_thread_action": thread_action,
+        "context_consumed": False,
         "exit_code": result.returncode,
         "timed_out": result.timed_out,
         "duration_seconds": result.duration_seconds,
@@ -1800,7 +2587,7 @@ def handle_failed_run(
     )
     state_path = study_file_path(root, study.path, "STATE.yaml")
     failure_session = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "study": study.project,
         "status": "failed",
@@ -1811,6 +2598,11 @@ def handle_failed_run(
         "ended_at": runtime["ended_at"],
         "codex_thread_id": thread_id,
         "replaced_thread_id": replaced_thread_id,
+        "context_revision": study.context_data.revision,
+        "handoff_id": study.context_data.latest_handoff,
+        "requested_thread_policy": requested_thread_policy,
+        "applied_thread_action": thread_action,
+        "context_consumed": False,
         "goal_sha256": goal_hash,
         "steering_sha256": steering_hash,
         "summary": state.summary,
@@ -1863,7 +2655,7 @@ def handle_failed_run_safely(**kwargs: Any) -> dict[str, Any]:
         errors = list(kwargs["errors"])
         errors.append(f"failure closeout failed: {type(exc).__name__}: {exc}")
         fallback = {
-            "schema_version": 1,
+            "schema_version": 2,
             "run_id": run_id,
             "project": study.project,
             "study": study.project,
@@ -1875,6 +2667,11 @@ def handle_failed_run_safely(**kwargs: Any) -> dict[str, Any]:
             "ended_at": utc_now(),
             "codex_thread_id": kwargs["thread_id"],
             "replaced_thread_id": kwargs["replaced_thread_id"],
+            "context_revision": study.context_data.revision,
+            "handoff_id": study.context_data.latest_handoff,
+            "requested_thread_policy": kwargs["requested_thread_policy"],
+            "applied_thread_action": kwargs["thread_action"],
+            "context_consumed": False,
             "exit_code": result.returncode,
             "timed_out": result.timed_out,
             "duration_seconds": result.duration_seconds,

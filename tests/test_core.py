@@ -277,6 +277,43 @@ def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     assert git(tmp_path, "status", "--short") == ""
 
 
+def test_registered_experiment_templates_render_valid_autonomous_records(
+    tmp_path: Path,
+) -> None:
+    core.init_workspace(tmp_path)
+    registry = yaml.safe_load(
+        (tmp_path / "protocols" / "registry.yaml").read_text(encoding="utf-8")
+    )
+
+    for protocol_id, metadata in registry["protocols"].items():
+        if metadata["status"] != "active":
+            continue
+        template = tmp_path / metadata["experiment_template"]
+        template_text = template.read_text(encoding="utf-8")
+        assert template_text.startswith("---\n"), protocol_id
+
+        experiment_id = "template-check"
+        study_id = "demo"
+        rendered = (
+            template_text.replace("<experiment-id>", experiment_id)
+            .replace("<study-id>", study_id)
+            .replace("<context-revision>", "1")
+            .replace("<run-id>", "test-run")
+        )
+        record = (
+            tmp_path
+            / "projects"
+            / study_id
+            / "experiments"
+            / experiment_id
+            / "EXPERIMENT.md"
+        )
+        record.parent.mkdir(parents=True)
+        record.write_text(rendered, encoding="utf-8")
+
+        assert core.experiment_producer(record) == "autonomous", protocol_id
+
+
 def test_init_creates_nested_git_root(tmp_path: Path) -> None:
     git(tmp_path, "init")
     workspace = tmp_path / "workspace"

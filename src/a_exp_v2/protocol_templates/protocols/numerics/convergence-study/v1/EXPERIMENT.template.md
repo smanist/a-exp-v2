@@ -1,3 +1,14 @@
+---
+id: <experiment-id>
+status: planned
+date: YYYY-MM-DD
+study: <study-id>
+protocol: numerics.convergence-study.v1
+producer: autonomous
+context_revision: <context-revision>
+run_id: <run-id>
+---
+
 # Experiment: <name>
 
 Protocol: `numerics.convergence-study.v1`

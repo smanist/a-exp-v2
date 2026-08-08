@@ -37,7 +37,7 @@ Experiment records may reference a protocol in frontmatter or body text:
 ---
 id: example-v1
 status: planned
-project: my-project
+study: my-study
 protocol: numerics.convergence-study.v1
 ---
 ```

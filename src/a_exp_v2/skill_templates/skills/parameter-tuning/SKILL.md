@@ -72,5 +72,7 @@ Record in the experiment:
 
 ## Git Closeout
 
-After writing repo changes, run `git status --short`, commit the intended
-changes, and leave the workspace clean except for intentionally ignored files.
+After writing repo changes, run `git status --short`. If `A_EXP_RUN_ID` is set,
+do not stage or commit: leave intended changes in the worktree and declare them
+for the outer runner. Otherwise commit the intended changes and leave the
+workspace clean except for intentionally ignored files.

@@ -58,7 +58,10 @@ playbook, template, and checklist.
 
 ## Git Rule
 
-Commit every material experiment or coherent code change. Successful runs and
-interactive shaping must leave the checkout clean except for ignored runtime
-files. Never stage the whole workspace during autonomous closeout; stage only
-declared changes and runner-owned state/session files.
+Interactive work commits every material experiment or coherent code change and
+leaves the checkout clean except for ignored runtime files. During an
+autonomous run (`A_EXP_RUN_ID` is set), do not run `git add` or `git commit`:
+leave intended study changes in the worktree and declare every changed path.
+The outer runner validates and commits those changes with the runner-owned
+state/session files. Read-only `.git` access is expected and is not a reason to
+request `needs_human`.

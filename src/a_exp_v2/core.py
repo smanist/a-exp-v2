@@ -65,6 +65,11 @@ DURABLE_STATES = {
 }
 EFFECTIVE_STATES = DURABLE_STATES | {"running", "disabled", "ineligible", "invalid"}
 AGENT_NEXT_STATES = {"ready", "needs_human", "paused", "blocked", "completed"}
+HUMAN_BLOCKER_KINDS = {
+    "scientific_decision",
+    "approval_required",
+    "external_resource_unavailable",
+}
 OUTCOME_NEXT_STATE = {
     "progress": "ready",
     "needs_human": "needs_human",
@@ -285,7 +290,7 @@ def init_workspace(root: Path) -> list[Path]:
 
     files = {
         runtime_file_path(root, CONFIG_PATH): default_config_text(),
-        runtime_file_path(root, Path(".a-exp/kit.lock.yaml")): "source: local\nversion: 0.3.0\n",
+        runtime_file_path(root, Path(".a-exp/kit.lock.yaml")): "source: local\nversion: 0.3.1\n",
         root / ".gitignore": default_gitignore_text(),
         root / "AGENTS.md": default_agents_text(),
         root / "modules/registry.yaml": "entries: []\n",
@@ -685,9 +690,9 @@ This repository is an a-exp-v2 study workspace.
 External schedulers call `a-exp run-once`. The command selects one ready study
 and starts or resumes one bounded Codex turn. Use the workflow skill, advance the
 study goal within its autonomy envelope, run foreground experiments as needed,
-commit each material checkpoint, and finish with the required structured
-closeout. Do not edit `STATE.yaml` during an autonomous run; a-exp owns the
-state transition after validating closeout.
+record each material checkpoint in the study worktree, and finish with the
+required structured closeout. Do not edit `STATE.yaml` during an autonomous
+run; a-exp owns the state transition after validating closeout.
 
 Interactive shaping may update and commit project files directly. Material
 Remote Project computations use experiment records with `producer: interactive`.
@@ -704,8 +709,12 @@ playbook and checklist, and record the protocol id in experiment memory.
 
 ## Git Rule
 
-Commit every material experiment or coherent code change. Leave the workspace
-clean after interactive shaping and after every successful autonomous run.
+Interactive work commits every material experiment or coherent code change and
+leaves the workspace clean. During an autonomous run (`A_EXP_RUN_ID` is set),
+do not run `git add` or `git commit`: leave intended study changes in the
+worktree and declare every changed path. The outer runner validates and commits
+those changes with the state and session closeout. Read-only `.git` access is
+expected and is not a reason to request `needs_human`.
 """
 
 
@@ -2163,12 +2172,12 @@ def workflow_prompt(study: Study, run_id: str) -> str:
         f"Handoff summary: {handoff.summary}",
         f"Next direction: {handoff.next_direction or 'not specified'}",
         "Advance the study goal within its autonomy envelope. You may implement code and run multiple coherent foreground experiments. Do not launch unmanaged detached processes.",
-        "Commit after every material experiment or coherent code change. GPU-produced experiment records must declare `producer: autonomous`.",
+        "During this autonomous run, do not run `git add` or `git commit`. Leave every intended study change in the worktree and declare every changed path in `files_changed`; the outer runner validates and commits those changes during closeout. Read-only `.git` access is expected and is not a reason to request `needs_human`. GPU-produced experiment records must declare `producer: autonomous`.",
         "Do not edit GOAL.md, STEERING.md, CONTEXT.yaml, anything under handoffs/, STATE.yaml, or anything under sessions/. These are interactive- or runner-owned control files.",
         "Do not edit files under any other projects/<study>/ directory during this selected study run.",
         "Use an explicit packet for separately scoped a-dev work rather than adding scheduler work units.",
         "",
-        "Your final response must satisfy the supplied JSON schema. Declare every repo path changed during this run, including paths already committed. Request exactly one next state: ready, needs_human, paused, blocked, or completed.",
+        "Your final response must satisfy the supplied JSON schema. Declare every repo path changed during this run. Request exactly one next state: ready, needs_human, paused, blocked, or completed. `needs_human` requires a concrete human-owned blocker classified as `scientific_decision`, `approval_required`, or `external_resource_unavailable`; runner-owned Git closeout and transient infrastructure failures do not qualify.",
     ]
     if steering.exists():
         lines.append("STEERING.md is present and must be incorporated before choosing further work.")
@@ -2186,6 +2195,7 @@ def validate_closeout(value: Any) -> list[str]:
     required = {
         "outcome",
         "next_state",
+        "blocker_kind",
         "summary",
         "experiments",
         "verification",
@@ -2206,6 +2216,22 @@ def validate_closeout(value: Any) -> list[str]:
         errors.append("invalid next_state")
     if outcome in OUTCOME_NEXT_STATE and next_state != OUTCOME_NEXT_STATE[outcome]:
         errors.append(f"outcome {outcome} requires next_state {OUTCOME_NEXT_STATE[outcome]}")
+    blocker_kind = value.get("blocker_kind")
+    if blocker_kind == "runner_git_commit":
+        errors.append(
+            "blocker_kind runner_git_commit is invalid because Git closeout is runner-owned"
+        )
+    elif next_state == "needs_human":
+        if blocker_kind not in HUMAN_BLOCKER_KINDS:
+            errors.append(
+                "needs_human requires blocker_kind to be one of: "
+                + ", ".join(sorted(HUMAN_BLOCKER_KINDS))
+            )
+        open_questions = value.get("open_questions")
+        if isinstance(open_questions, list) and not open_questions:
+            errors.append("needs_human requires at least one open question")
+    elif blocker_kind is not None:
+        errors.append("blocker_kind must be null unless next_state is needs_human")
     if not isinstance(value.get("summary"), str) or not value.get("summary", "").strip():
         errors.append("summary must be a non-empty string")
     for field_name in ("experiments", "files_changed", "artifacts", "open_questions"):
@@ -2607,6 +2633,7 @@ def close_successful_run(
         "study": study.project,
         "status": "completed",
         "outcome": closeout["outcome"],
+        "blocker_kind": closeout["blocker_kind"],
         "previous_state": study.state_data.state,
         "next_state": next_state,
         "started_at": started_at,
@@ -2698,6 +2725,7 @@ def handle_failed_run(
         "study": study.project,
         "status": "failed",
         "study_outcome": "infrastructure_failed",
+        "blocker_kind": None,
         "previous_state": study.state_data.state,
         "next_state": "recovery_required" if not clean or unsafe else "ready",
         "started_at": started_at,
@@ -2781,6 +2809,7 @@ def handle_failed_run(
         "study": study.project,
         "status": "failed",
         "outcome": "infrastructure_failed",
+        "blocker_kind": None,
         "previous_state": study.state_data.state,
         "next_state": next_state,
         "started_at": started_at,
@@ -2809,6 +2838,7 @@ def handle_failed_run(
     runtime.update(
         {
             "summary": failure_session["summary"],
+            "blocker_kind": failure_session["blocker_kind"],
             "experiments": failure_session["experiments"],
             "verification": failure_session["verification"],
             "files_changed": failure_session["files_changed"],

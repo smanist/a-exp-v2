@@ -17,6 +17,7 @@ def closeout() -> dict[str, object]:
     return {
         "outcome": "completed",
         "next_state": "completed",
+        "blocker_kind": None,
         "summary": "done",
         "experiments": ["one", "two"],
         "verification": [{"command": "check", "result": "passed"}],

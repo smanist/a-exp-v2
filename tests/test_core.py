@@ -135,6 +135,7 @@ def successful_closeout(
     return {
         "outcome": outcome,
         "next_state": next_state,
+        "blocker_kind": "scientific_decision" if next_state == "needs_human" else None,
         "summary": "Made measurable progress",
         "experiments": experiments or ["exp-a", "exp-b"],
         "verification": [{"command": "pytest -q", "result": "passed"}],
@@ -181,6 +182,7 @@ def completed_session_data(
         "study": study,
         "status": "completed",
         "outcome": "progress" if next_state == "ready" else next_state,
+        "blocker_kind": "scientific_decision" if next_state == "needs_human" else None,
         "previous_state": "ready",
         "next_state": next_state,
         "started_at": "2026-08-01T00:00:00Z",
@@ -202,7 +204,7 @@ def completed_session_data(
         "budget_used": {"wall_seconds": 1, "experiments": 0},
         "commits": [],
         "next_direction": None,
-        "open_questions": [],
+        "open_questions": ["Choose a threshold"] if next_state == "needs_human" else [],
     }
 
 
@@ -271,8 +273,19 @@ def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     assert (tmp_path / "docs" / "schemas" / "context-handoff.md").exists()
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
     assert load_config(tmp_path / ".a-exp" / "config.yaml").layout_version == 3
-    assert yaml.safe_load((tmp_path / ".a-exp" / "kit.lock.yaml").read_text())["version"] == "0.3.0"
-    assert "STATE.yaml" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert yaml.safe_load((tmp_path / ".a-exp" / "kit.lock.yaml").read_text())["version"] == "0.3.1"
+    agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "STATE.yaml" in agents_text
+    assert "do not run `git add` or `git commit`" in agents_text
+    workflow_text = (tmp_path / ".agents/skills/workflow/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Read-only `.git` access is" in workflow_text
+    assert "Runner-owned Git" in workflow_text
+    experiment_text = (tmp_path / "docs/conventions/experiment-execution.md").read_text(
+        encoding="utf-8"
+    )
+    assert "A_EXP_RUN_ID" in experiment_text
     assert git(tmp_path, "log", "-1", "--format=%s") == "Initialize a-exp-v2 workspace"
     assert git(tmp_path, "status", "--short") == ""
 
@@ -319,6 +332,72 @@ def test_init_creates_nested_git_root(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     core.init_workspace(workspace)
     assert Path(git(workspace, "rev-parse", "--show-toplevel")) == workspace
+
+
+def test_workflow_prompt_assigns_git_ownership_to_runner(tmp_path: Path) -> None:
+    core.init_workspace(tmp_path)
+    write_study(tmp_path, "demo")
+    studies, issues = core.discover_studies(tmp_path)
+
+    assert issues == []
+    prompt = core.workflow_prompt(studies[0], "run-1")
+    assert "do not run `git add` or `git commit`" in prompt
+    assert "outer runner validates and commits" in prompt
+    assert "Read-only `.git` access is expected" in prompt
+    assert "runner-owned Git closeout" in prompt
+
+
+def test_closeout_blocker_kind_contract() -> None:
+    for blocker_kind in sorted(core.HUMAN_BLOCKER_KINDS):
+        closeout = successful_closeout(next_state="needs_human")
+        closeout["blocker_kind"] = blocker_kind
+        assert core.validate_closeout(closeout) == []
+
+    runner_git = successful_closeout(next_state="needs_human")
+    runner_git["blocker_kind"] = "runner_git_commit"
+    assert any(
+        "Git closeout is runner-owned" in error
+        for error in core.validate_closeout(runner_git)
+    )
+
+    unanswered = successful_closeout(next_state="needs_human")
+    unanswered["open_questions"] = []
+    assert "needs_human requires at least one open question" in core.validate_closeout(
+        unanswered
+    )
+
+    progress = successful_closeout()
+    progress["blocker_kind"] = "scientific_decision"
+    assert (
+        "blocker_kind must be null unless next_state is needs_human"
+        in core.validate_closeout(progress)
+    )
+
+    missing = successful_closeout()
+    missing.pop("blocker_kind")
+    assert "missing closeout field(s): blocker_kind" in core.validate_closeout(missing)
+
+
+def test_schema_version_two_session_without_blocker_kind_remains_valid() -> None:
+    record = completed_session_data("demo", "legacy", goal_sha256="0" * 64)
+    record.pop("blocker_kind")
+
+    assert validate_run_record(record, committed=True) == []
+
+
+def test_committed_session_rejects_runner_owned_git_blocker() -> None:
+    record = completed_session_data(
+        "demo",
+        "invalid-blocker",
+        goal_sha256="0" * 64,
+        next_state="needs_human",
+    )
+    record["blocker_kind"] = "runner_git_commit"
+
+    assert any(
+        "Git closeout is runner-owned" in error
+        for error in validate_run_record(record, committed=True)
+    )
 
 
 def test_init_rejects_external_runtime_root_before_writing(tmp_path: Path) -> None:
@@ -702,6 +781,8 @@ def test_successful_run_applies_each_valid_next_state(
     assert record["requested_thread_policy"] == "resume"
     assert record["applied_thread_action"] == "new"
     assert record["context_consumed"] is True
+    expected_blocker = "scientific_decision" if next_state == "needs_human" else None
+    assert record["blocker_kind"] == expected_blocker
     assert validate_run_record(record) == []
     state = core.load_study_state(tmp_path / "projects" / "demo" / "STATE.yaml")
     assert state.state == next_state
@@ -711,7 +792,7 @@ def test_successful_run_applies_each_valid_next_state(
     assert git(tmp_path, "status", "--short") == ""
 
 
-def test_success_closeout_stages_declared_paths_and_records_checkpoint_commits(
+def test_success_closeout_commits_declared_worktree_paths_as_runner_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core.init_workspace(tmp_path)
@@ -720,8 +801,6 @@ def test_success_closeout_stages_declared_paths_and_records_checkpoint_commits(
     def fake_run_codex(**_: Any) -> CodexRunResult:
         result_path = tmp_path / "projects" / "demo" / "RESULT.md"
         result_path.write_text("evidence\n", encoding="utf-8")
-        git(tmp_path, "add", "projects/demo/RESULT.md")
-        git(tmp_path, "commit", "-m", "Record experiment checkpoint")
         return result(successful_closeout(files=["projects/demo/RESULT.md"]))
 
     monkeypatch.setattr(core, "run_codex", fake_run_codex)
@@ -730,10 +809,15 @@ def test_success_closeout_stages_declared_paths_and_records_checkpoint_commits(
         next((tmp_path / "projects" / "demo" / "sessions").glob("*.yaml")).read_text()
     )
     assert "projects/demo/RESULT.md" in record["files_changed"]
-    assert len(session["commits"]) == 1
-    assert git(tmp_path, "show", "--format=%s", "--no-patch", session["commits"][0]) == (
-        "Record experiment checkpoint"
+    assert session["commits"] == []
+    assert record["closeout_commit"] == git(tmp_path, "rev-parse", "HEAD")
+    assert git(tmp_path, "show", "--format=%s", "--no-patch", "HEAD").startswith(
+        "Close a-exp run "
     )
+    committed_paths = set(git(tmp_path, "show", "--format=", "--name-only", "HEAD").splitlines())
+    assert "projects/demo/RESULT.md" in committed_paths
+    assert "projects/demo/STATE.yaml" in committed_paths
+    assert any(path.startswith("projects/demo/sessions/") for path in committed_paths)
     assert git(tmp_path, "status", "--short") == ""
 
 

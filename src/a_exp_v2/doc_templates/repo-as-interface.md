@@ -13,8 +13,10 @@ sessions, autonomous sessions, and schedulers.
    `STATE.yaml` with `state: ready`.
 5. `run-once` consumes that revision, selects one study, runs one long Codex
    turn, and commits a session closeout plus the requested lifecycle transition.
-6. Use `needs_human` and `open_questions` for study-level interaction; use
-   `APPROVAL_QUEUE.md` for explicit approvals.
+6. Use `needs_human` only for a scientific decision, approval, or unavailable
+   external resource that a human must resolve; classify it with
+   `blocker_kind`, make `open_questions` concrete, and use `APPROVAL_QUEUE.md`
+   for explicit approvals. Runner-owned Git closeout is not a human blocker.
 
 Thread IDs, logs, active markers, and raw run records under `.a-exp/` are local
 operational aids. They do not replace committed project memory and may differ

@@ -9,7 +9,11 @@ projects/<study>/sessions/<run-id>.yaml
 Schema version 2 records timestamps, study/run IDs, Codex thread and any
 replaced thread, goal/steering hashes, outcome, previous and next states,
 summary, experiments, verification, declared files, artifacts, budget usage,
-commits, next direction, and open questions. It also records
+commits, next direction, open questions, and `blocker_kind`. New records use a
+null blocker kind except for `needs_human`, which requires
+`scientific_decision`, `approval_required`, or
+`external_resource_unavailable`. Legacy schema-version-2 records without
+`blocker_kind` remain valid. The record also includes
 `context_revision`, `handoff_id`, requested thread policy, applied thread action
 (`new`, `resume`, `replace`, or `resume_fallback`), and `context_consumed`.
 Infrastructure failures with a safe worktree also receive a committed failure

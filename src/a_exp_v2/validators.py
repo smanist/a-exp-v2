@@ -31,6 +31,11 @@ RUN_OUTCOME_NEXT_STATE = {
     "completed": "completed",
     "infrastructure_failed": None,
 }
+HUMAN_BLOCKER_KINDS = {
+    "scientific_decision",
+    "approval_required",
+    "external_resource_unavailable",
+}
 RUN_CONTENT_FIELDS = {
     "outcome",
     "summary",
@@ -61,6 +66,7 @@ COMMITTED_RUN_FIELDS = {
     "context_consumed",
     "goal_sha256",
     "steering_sha256",
+    "blocker_kind",
     *RUN_CONTENT_FIELDS,
     "errors",
 }
@@ -347,6 +353,23 @@ def validate_run_record(
             errors.append(f"outcome {outcome} requires next_state {expected_state}")
         if outcome == "infrastructure_failed" and data.get("status") != "failed":
             errors.append("infrastructure_failed outcome requires failed status")
+    if "blocker_kind" in data:
+        blocker_kind = data.get("blocker_kind")
+        if blocker_kind == "runner_git_commit":
+            errors.append(
+                "blocker_kind runner_git_commit is invalid because Git closeout is runner-owned"
+            )
+        elif outcome == "needs_human":
+            if blocker_kind not in HUMAN_BLOCKER_KINDS:
+                errors.append(
+                    "needs_human requires blocker_kind to be one of: "
+                    + ", ".join(sorted(HUMAN_BLOCKER_KINDS))
+                )
+            open_questions = data.get("open_questions")
+            if isinstance(open_questions, list) and not open_questions:
+                errors.append("needs_human requires at least one open question")
+        elif blocker_kind is not None:
+            errors.append("blocker_kind must be null unless outcome is needs_human")
     for key in ("experiments", "files_changed", "artifacts", "commits", "open_questions"):
         value = data.get(key)
         if value is not None and (

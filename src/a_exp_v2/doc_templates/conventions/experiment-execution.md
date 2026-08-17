@@ -13,9 +13,11 @@ Record `producer: interactive` for Remote Project work and
 `producer: autonomous` for runner work. Record enough durable information to
 reproduce and interpret each experiment: question, context revision,
 configuration, code revision, environment/GPU, commands, metrics,
-artifacts, findings, caveats, and verification. Commit after each material
-experiment. A session may then use those findings to choose another experiment
-within the goal's autonomy envelope.
+artifacts, findings, caveats, and verification. Interactive work commits each
+material experiment. During an autonomous run (`A_EXP_RUN_ID` is set), leave
+the experiment changes in the worktree and declare them for the outer runner to
+validate and commit. A session may then use those findings to choose another
+experiment within the goal's autonomy envelope.
 
 Commit interactive positive, negative, or failed evidence whenever it changes
 or justifies steering, a decision, the goal, or next direction. Disposable

@@ -99,6 +99,7 @@ def closeout(next_state: str = "completed") -> dict[str, Any]:
     return {
         "outcome": "completed" if next_state == "completed" else "progress",
         "next_state": next_state,
+        "blocker_kind": None,
         "summary": "Finished the study",
         "experiments": ["exp-1"],
         "verification": [{"command": "pytest", "result": "passed"}],

@@ -5,6 +5,7 @@
   "required": [
     "outcome",
     "next_state",
+    "blocker_kind",
     "summary",
     "experiments",
     "verification",
@@ -22,6 +23,16 @@
     "next_state": {
       "type": "string",
       "enum": ["ready", "needs_human", "paused", "blocked", "completed"]
+    },
+    "blocker_kind": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "scientific_decision",
+        "approval_required",
+        "external_resource_unavailable"
+      ],
+      "description": "Human-owned blocker classification; null unless next_state is needs_human. Runner-owned Git closeout and transient infrastructure failures do not qualify."
     },
     "summary": {"type": "string", "minLength": 1},
     "experiments": {"type": "array", "items": {"type": "string"}},

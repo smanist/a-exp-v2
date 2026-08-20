@@ -29,8 +29,11 @@ latest_handoff: null
 may remain after the first YAML handoff is added.
 
 `README.md` records environment and orientation. `GOAL.md` must state the
-objective, evidence criteria, autonomy envelope, and stop conditions. Initialize
-strict state as:
+objective, evidence criteria, autonomy envelope, and stop conditions. Within
+the autonomy envelope, use explicit `Scientific Invariants`, `Authorized
+Contingencies`, and `Human-Only Decisions` sections. Complete the approval
+budget required by `docs/conventions/approval-budget.md`; do not leave generic
+permission such as "retry as needed." Initialize strict state as:
 
 ```yaml
 schema_version: 1
@@ -48,6 +51,13 @@ Add `PLAN.md`, `DECISIONS.md`, `STEERING.md`, `experiments/`, or `sessions/`
 only when useful. Keep `sessions/` reserved for runner-owned autonomous
 closeouts. For experiment-heavy studies, consult
 `protocols/registry.yaml` and reference applicable protocols.
+
+Before freezing an experiment-heavy design, run every applicable protocol's
+pre-freeze feasibility check. Use structural, reference-only, or design data;
+do not inspect sealed confirmation/test performance. Resolve infeasible sample
+counts, degenerate metrics, insufficient reference coverage, invalid artifact
+paths, and compute estimates during shaping. Map remaining anticipated failure
+modes to bounded contingencies or explicit human-only decisions.
 
 Keep the goal stable unless the human changes it. Agent-initiated study
 proposals remain in `reports/project/` or `APPROVAL_QUEUE.md` until accepted.

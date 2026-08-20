@@ -1,5 +1,28 @@
 # Convergence Study Checklist
 
+## Pre-Freeze Feasibility
+
+Complete this gate before freezing the evidence-producing design. Use
+structural, reference-only, or design data, not sealed confirmation/test
+performance or method rankings.
+
+- [ ] Every planned anchor is enumerated and exercised by a bounded feasibility
+  probe.
+- [ ] Required sample, trial, event, and return counts are attainable at every
+  anchor without weakening a requirement.
+- [ ] Primary and decision-relevant secondary metrics are finite,
+  nondegenerate, and discriminative on their intended support.
+- [ ] Reference or truth coverage spans every planned anchor and evaluation
+  window with an explicit accuracy margin.
+- [ ] Artifact paths resolve, are distinct where required, and have explicit
+  overwrite and supersession behavior.
+- [ ] Smoke, full-run, retry, and diagnostic compute are estimated and fit the
+  study's compute envelope.
+- [ ] Anticipated feasibility failures map to an authorized contingency with
+  attempt and compute caps, or to an explicit human-only decision.
+- [ ] The feasibility probe did not open sealed confirmation/test outputs, tune
+  a threshold from method performance, or change benchmark membership.
+
 ## Before Running
 
 - [ ] Convergence question is written.

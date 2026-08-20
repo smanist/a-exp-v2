@@ -59,6 +59,12 @@ secrets. Full results belong in referenced experiment records. Current
 committed study files outrank the latest handoff, which outranks older handoffs
 and sessions, which outrank thread memory.
 
+The approval budget remains authoritative in `GOAL.md`; it is not a separate
+handoff field. At handoff preparation, summarize active contingency IDs and
+cumulative usage or remaining caps in `constraints`, and name `GOAL.md` plus
+the usage records in `relevant_paths`. Do not duplicate the full budget. A
+handoff or context revision does not reset cumulative contingency use.
+
 `source_commit` identifies the clean interactive evidence/memory commit on
 which the handoff was based; it does not identify the later commit that adds
 the handoff itself. `based_on_run_id` is the last autonomous run actually

@@ -47,6 +47,7 @@ Each machine is independent. Host capabilities come from
 - [Status JSON](docs/schemas/status-json.md)
 - [Run and Session Records](docs/schemas/run-record.md)
 - [Interactive Context and Handoffs](docs/schemas/context-handoff.md)
+- [Approval Budgets](docs/conventions/approval-budget.md)
 
 ## Opt-in Real Codex Smoke Test
 

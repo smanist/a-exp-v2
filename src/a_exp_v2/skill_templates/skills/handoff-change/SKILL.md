@@ -11,6 +11,11 @@ Use only when the human explicitly invokes `$handoff-change`. This skill changes
 
 Read `AGENTS.md`, `docs/schemas/context-handoff.md`, the study files, latest handoff, autonomous sessions since it, and referenced experiment evidence. If the new objective is unrelated rather than a revision of the current study, recommend creating a new study and stop. Revision 0 has no active goal to replace; use `$handoff-continue` for its initial activation.
 
+Read `docs/conventions/approval-budget.md`. Require the revised `GOAL.md` to
+separate `Scientific Invariants`, `Authorized Contingencies`, and `Human-Only
+Decisions`. Review prior contingency usage before changing or replenishing a
+cap; never silently reset cumulative usage.
+
 Require a byte-level change to `GOAL.md` relative to the latest handoff. If the hash is unchanged, stop and recommend `$handoff-continue`. There is no editorial override.
 
 ## Preserve interactive evidence
@@ -28,6 +33,7 @@ Create one append-only record at `handoffs/<handoff-id>.yaml`, advance `CONTEXT.
 - Hash the exact current bytes of `GOAL.md` and `STEERING.md`; the goal hash must differ from the prior record.
 - Set `based_on_run_id` to the last autonomous run actually inspected.
 - Reference experiment IDs and artifacts without embedding full results.
+- In `constraints`, summarize active contingency IDs and cumulative usage or remaining caps. Include `GOAL.md` and usage records in `relevant_paths`; do not duplicate the full approval budget.
 - Never include raw transcripts, secrets, or embedded logs; keep the record under 64 KiB.
 
 Update `STATE.yaml` to `state: ready`, set `ready_after: null`, and summarize the replacement direction. Commit only the exact new handoff, context, state, and intentionally updated memory paths. Finish clean and report the new revision, replacement request, superseded context, evidence IDs, source commit, and handoff commit.

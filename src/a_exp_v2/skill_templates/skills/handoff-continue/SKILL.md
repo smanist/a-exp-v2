@@ -11,6 +11,13 @@ Use only when the human explicitly invokes `$handoff-continue`. This skill mutat
 
 Read `AGENTS.md`, `docs/schemas/context-handoff.md`, and the study's committed files. Require a clean starting checkout or isolate and commit already-authorized interactive work first. Load and validate `CONTEXT.yaml` and the complete handoff chain.
 
+Validate the `Scientific Invariants`, `Authorized Contingencies`, and
+`Human-Only Decisions` sections of `GOAL.md` against
+`docs/conventions/approval-budget.md`. For a revision-0 study, require a
+complete approval budget before activation. For an older active study that
+lacks one, stop and recommend adding it through `$handoff-change`; do not
+invent authority during continuation.
+
 Refuse continuation if the current byte-level SHA-256 of `GOAL.md` differs from the latest handoff's `goal_sha256`. For revision 0, create an `initial` handoff instead; there is no prior goal hash to compare. Never classify a goal edit as editorial.
 
 Find every interactive computation that influenced steering, a decision, the goal, or the next direction, including useful failures and negative evidence. Ensure each has a committed `experiments/<id>/EXPERIMENT.md` with `producer: interactive`, commands, configuration, context revision, environment/GPU, metrics, artifacts, findings, caveats, and verification. Follow applicable protocols. Omit disposable probes that affected no decision. Interactive processes must remain foreground children of this Codex turn.
@@ -29,6 +36,7 @@ Create exactly one new append-only `handoffs/<handoff-id>.yaml` and advance `CON
 - Set `based_on_run_id` to the last autonomous run actually inspected, or null when none exists.
 - Reference interactive experiment IDs and artifact paths; summarize implications without duplicating full results.
 - List relevant interactive commits, retained evidence, decisions, constraints, rejected alternatives, next direction, and questions. Use empty lists when a category is genuinely empty.
+- In `constraints`, summarize the active contingency IDs and their cumulative usage or remaining caps. Include `GOAL.md` and the usage records in `relevant_paths`; do not duplicate the full approval budget in the handoff.
 - Never include raw transcripts, secrets, or embedded logs. Keep the record under 64 KiB.
 
 Update `STATE.yaml` to `state: ready`, preserve its schema version, reset `ready_after` to null, and describe the handed-off direction. Commit only the exact handoff, context, state, and any intentionally updated control-memory paths. Finish with a clean checkout and report the revision, handoff ID, source commit, evidence IDs, and commit.

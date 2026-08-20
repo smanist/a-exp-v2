@@ -4,7 +4,10 @@ A valid study has `projects/<study>/README.md`, `GOAL.md`, `STATE.yaml`,
 `CONTEXT.yaml`, and `handoffs/`.
 
 `GOAL.md` defines the objective, evidence criteria, autonomy envelope, and stop
-conditions. `README.md` orients the environment. Optional `PLAN.md`,
+conditions. Its autonomy envelope must distinguish scientific invariants,
+authorized contingencies, and human-only decisions, with the approval budget
+specified by `docs/conventions/approval-budget.md`. `README.md` orients the
+environment. Optional `PLAN.md`,
 `DECISIONS.md`, and `STEERING.md` hold evolving strategy and instructions.
 Study files and the `handoffs/` and optional `sessions/` and `experiments/`
 directories must be

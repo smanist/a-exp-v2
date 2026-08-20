@@ -676,7 +676,8 @@ This repository is an a-exp-v2 study workspace.
 - `.agents/skills/`: reusable study workflows.
 - `protocols/`: experiment playbooks and validation checklists.
 - `projects/<study>/README.md`: environment and orientation.
-- `projects/<study>/GOAL.md`: objective, evidence, autonomy, and stop criteria.
+- `projects/<study>/GOAL.md`: objective, evidence, scientific invariants,
+  authorized contingencies, human-only decisions, and stop criteria.
 - `projects/<study>/STATE.yaml`: scheduler-owned durable lifecycle state.
 - `projects/<study>/CONTEXT.yaml` and `handoffs/`: interactive context revision
   and append-only ownership handoffs.
@@ -693,6 +694,11 @@ study goal within its autonomy envelope, run foreground experiments as needed,
 record each material checkpoint in the study worktree, and finish with the
 required structured closeout. Do not edit `STATE.yaml` during an autonomous
 run; a-exp owns the state transition after validating closeout.
+
+Before requesting `needs_human`, check the study approval budget. Execute an
+exactly matching authorized contingency while its cumulative cap remains,
+record its use, and return `ready` when more work remains. Never infer or
+broaden contingency authority.
 
 Interactive shaping may update and commit project files directly. Material
 Remote Project computations use experiment records with `producer: interactive`.
@@ -2171,12 +2177,13 @@ def workflow_prompt(study: Study, run_id: str) -> str:
         "Precedence is: current committed study files, latest validated handoff, older handoffs and session records, then Codex thread memory. Resolve conflicts in that order.",
         f"Handoff summary: {handoff.summary}",
         f"Next direction: {handoff.next_direction or 'not specified'}",
-        "Advance the study goal within its autonomy envelope. You may implement code and run multiple coherent foreground experiments. Do not launch unmanaged detached processes.",
+        "Advance the study goal within its autonomy envelope. Read its scientific invariants, authorized contingencies, human-only decisions, and cumulative contingency usage. You may implement code and run multiple coherent foreground experiments. Do not launch unmanaged detached processes.",
         "During this autonomous run, do not run `git add` or `git commit`. Leave every intended study change in the worktree and declare every changed path in `files_changed`; the outer runner validates and commits those changes during closeout. Read-only `.git` access is expected and is not a reason to request `needs_human`. GPU-produced experiment records must declare `producer: autonomous`.",
         "Do not edit GOAL.md, STEERING.md, CONTEXT.yaml, anything under handoffs/, STATE.yaml, or anything under sessions/. These are interactive- or runner-owned control files.",
         "Do not edit files under any other projects/<study>/ directory during this selected study run.",
         "Use an explicit packet for separately scoped a-dev work rather than adding scheduler work units.",
         "",
+        "Before requesting `needs_human`, compare the blocker with the approval budget. Execute an exact matching authorized contingency while its cumulative attempt and compute caps remain, record its ID and usage in editable study memory, and request `ready` when more work remains. Do not broaden a contingency by analogy. Request human input when no contingency matches, a cap is exhausted, the scientific effect is ambiguous, or a human-only boundary would change.",
         "Your final response must satisfy the supplied JSON schema. Declare every repo path changed during this run. Request exactly one next state: ready, needs_human, paused, blocked, or completed. `needs_human` requires a concrete human-owned blocker classified as `scientific_decision`, `approval_required`, or `external_resource_unavailable`; runner-owned Git closeout and transient infrastructure failures do not qualify.",
     ]
     if steering.exists():

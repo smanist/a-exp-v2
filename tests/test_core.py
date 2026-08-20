@@ -271,17 +271,41 @@ def test_init_creates_taskless_workspace_and_commits(tmp_path: Path) -> None:
     assert list((tmp_path / "projects").iterdir()) == []
     assert (tmp_path / "docs" / "schemas" / "study.md").exists()
     assert (tmp_path / "docs" / "schemas" / "context-handoff.md").exists()
+    assert (tmp_path / "docs" / "conventions" / "approval-budget.md").exists()
     assert (tmp_path / ".agents" / "skills" / "workflow" / "SKILL.md").exists()
     assert load_config(tmp_path / ".a-exp" / "config.yaml").layout_version == 3
     assert yaml.safe_load((tmp_path / ".a-exp" / "kit.lock.yaml").read_text())["version"] == "0.3.1"
     agents_text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "STATE.yaml" in agents_text
     assert "do not run `git add` or `git commit`" in agents_text
+    assert (
+        "Before requesting `needs_human`, check the study approval budget" in agents_text
+    )
     workflow_text = (tmp_path / ".agents/skills/workflow/SKILL.md").read_text(
         encoding="utf-8"
     )
     assert "Read-only `.git` access is" in workflow_text
     assert "Runner-owned Git" in workflow_text
+    assert "Before requesting `needs_human`" in workflow_text
+    assert "cumulative attempt and compute caps" in workflow_text
+    project_text = (tmp_path / ".agents/skills/project/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_project_text = " ".join(project_text.split())
+    assert "Scientific Invariants" in normalized_project_text
+    assert "Authorized Contingencies" in normalized_project_text
+    assert "Human-Only Decisions" in normalized_project_text
+    handoff_text = (tmp_path / ".agents/skills/handoff-continue/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "cumulative usage or remaining caps" in handoff_text
+    checklist_text = (
+        tmp_path / "protocols/numerics/convergence-study/v1/checklist.md"
+    ).read_text(encoding="utf-8")
+    assert "## Pre-Freeze Feasibility" in checklist_text
+    assert "Every planned anchor" in checklist_text
+    assert "Reference or truth coverage" in checklist_text
+    assert "Artifact paths resolve" in checklist_text
     experiment_text = (tmp_path / "docs/conventions/experiment-execution.md").read_text(
         encoding="utf-8"
     )
@@ -345,6 +369,9 @@ def test_workflow_prompt_assigns_git_ownership_to_runner(tmp_path: Path) -> None
     assert "outer runner validates and commits" in prompt
     assert "Read-only `.git` access is expected" in prompt
     assert "runner-owned Git closeout" in prompt
+    assert "compare the blocker with the approval budget" in prompt
+    assert "cumulative attempt and compute caps" in prompt
+    assert "request `ready` when more work remains" in prompt
 
 
 def test_closeout_blocker_kind_contract() -> None:

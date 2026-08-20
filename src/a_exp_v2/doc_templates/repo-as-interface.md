@@ -3,7 +3,8 @@
 Committed files are the durable interface among humans, interactive Codex
 sessions, autonomous sessions, and schedulers.
 
-1. Shape the objective and autonomy envelope in `GOAL.md`.
+1. Shape the objective and autonomy envelope in `GOAL.md`, separating
+   scientific invariants, authorized contingencies, and human-only decisions.
 2. Record durable context in `README.md`, `PLAN.md`, `DECISIONS.md`, experiment
    records, and artifacts.
 3. Add current instructions in `STEERING.md`.
@@ -13,10 +14,13 @@ sessions, autonomous sessions, and schedulers.
    `STATE.yaml` with `state: ready`.
 5. `run-once` consumes that revision, selects one study, runs one long Codex
    turn, and commits a session closeout plus the requested lifecycle transition.
-6. Use `needs_human` only for a scientific decision, approval, or unavailable
-   external resource that a human must resolve; classify it with
-   `blocker_kind`, make `open_questions` concrete, and use `APPROVAL_QUEUE.md`
-   for explicit approvals. Runner-owned Git closeout is not a human blocker.
+6. Before `needs_human`, apply any exact matching contingency that remains
+   inside its cumulative cap and record its use. Use `needs_human` only when no
+   contingency matches, a cap is exhausted, the scientific effect is
+   ambiguous, or a human-only decision or unavailable external resource must
+   be resolved. Classify it with `blocker_kind`, make `open_questions`
+   concrete, and use `APPROVAL_QUEUE.md` for explicit approvals. Runner-owned
+   Git closeout is not a human blocker.
 
 Thread IDs, logs, active markers, and raw run records under `.a-exp/` are local
 operational aids. They do not replace committed project memory and may differ

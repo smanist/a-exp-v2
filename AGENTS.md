@@ -25,6 +25,9 @@ durable Codex-assisted studies and bounded autonomous sessions.
 `projects/<study>/README.md`, `GOAL.md`, `STATE.yaml`, `CONTEXT.yaml`, and an
 empty `handoffs/` directory in `shaping` state. Optional study memory includes
 `PLAN.md`, `DECISIONS.md`, `STEERING.md`, `experiments/`, and `sessions/`.
+Every new `GOAL.md` separates scientific invariants, bounded authorized
+contingencies, and human-only decisions as defined by the approval-budget
+convention.
 
 Machine-local runtime state lives under ignored `.a-exp/` directories. The
 repository is authoritative: committed study files determine what future
@@ -48,6 +51,12 @@ one ready, eligible study and runs or resumes one bounded Codex turn. The turn
 may implement code and run multiple foreground experiments. It must not edit
 `STATE.yaml`; the runner validates structured closeout and owns the state
 transition and session record.
+
+Before requesting `needs_human`, autonomous work checks for an exact matching
+authorized contingency with remaining cumulative capacity, executes and
+records it when safe, and returns `ready` when more work remains. Scientific
+changes, ambiguity, sealed-data access, evidence weakening, and exhausted caps
+remain human-owned.
 
 Autonomous turns must not edit `GOAL.md`, `STEERING.md`, `CONTEXT.yaml`,
 `handoffs/`, `STATE.yaml`, or `sessions/`, and must not edit files under another

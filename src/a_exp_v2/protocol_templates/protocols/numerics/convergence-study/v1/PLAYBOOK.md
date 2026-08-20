@@ -37,6 +37,21 @@ Before running the study, write:
 - whether any stochastic element requires repeated trials;
 - reproducibility commands and artifact locations.
 
+## Pre-Freeze Feasibility
+
+Before freezing the evidence-producing design, exercise every planned anchor
+with bounded structural, reference-only, or design-data probes. Verify that
+sample counts are attainable, metrics are nondegenerate on their intended
+support, references cover the planned windows with sufficient accuracy,
+artifact paths and overwrite rules are valid, and approximate smoke, full-run,
+retry, and diagnostic compute fit the autonomy envelope.
+
+Do not use the feasibility gate to inspect sealed confirmation/test
+performance, rank methods, tune scientific thresholds, weaken evidence
+requirements, or change benchmark membership. Predeclare bounded responses to
+anticipated operational failures in the study approval budget. Treat failures
+that require a scientific change as human-only decisions.
+
 ## Standard Workflow
 
 1. Define the convergence question and the expected qualitative direction of
@@ -49,20 +64,23 @@ Before running the study, write:
    cases.
 5. Record all fixed parameters, tuned parameters, tuning budgets, solver
    tolerances, random seeds, and realization policies.
-6. Run a small smoke case to verify execution, metrics, artifacts, and plots.
-7. Run the planned sweep.
-8. Inspect raw results before interpreting summaries or plots.
-9. Compute convergence trends or rates over the stated fit window when
+6. Complete the pre-freeze feasibility gate across every planned anchor and
+   record the approval budget.
+7. Freeze the evidence-producing design.
+8. Run a small smoke case to verify execution, metrics, artifacts, and plots.
+9. Run the planned sweep.
+10. Inspect raw results before interpreting summaries or plots.
+11. Compute convergence trends or rates over the stated fit window when
    appropriate.
-10. Compare the observed trend with the expected trend if one is known.
-11. Flag unexplained reversals, unstable fitted rates, reference-solution
+12. Compare the observed trend with the expected trend if one is known.
+13. Flag unexplained reversals, unstable fitted rates, reference-solution
    limits, solver failures, parameter-selection shifts, or raw/summary/plot
    mismatches.
-12. If suspicious behavior appears, mark conclusions provisional and debug one
+14. If suspicious behavior appears, mark conclusions provisional and debug one
    representative anchor case first.
-13. Patch only the identified root cause, then rerun the anchor case.
-14. Rerun the full study when a code or protocol fix changes the result.
-15. Mark earlier artifacts as superseded, confirmed, partially confirmed, or
+15. Patch only the identified root cause, then rerun the anchor case.
+16. Rerun the full study when a code or protocol fix changes the result.
+17. Mark earlier artifacts as superseded, confirmed, partially confirmed, or
    provisional.
 
 ## Comparison Studies

@@ -11,3 +11,7 @@ Budget support is lightweight and repo-local.
 Studies that require significant budget or compute outside their autonomy
 envelope should move to `needs_human` and write a request to
 `APPROVAL_QUEUE.md`.
+
+This provider/compute budget is distinct from the approval budget in
+`docs/conventions/approval-budget.md`. A preauthorized contingency may consume
+compute only inside both budgets; exceeding either cap requires human input.

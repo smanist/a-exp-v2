@@ -17,7 +17,7 @@ artifacts, findings, caveats, and verification. Interactive work commits each
 material experiment. During an autonomous run (`A_EXP_RUN_ID` is set), leave
 the experiment changes in the worktree and declare them for the outer runner to
 validate and commit. A session may then use those findings to choose another
-experiment within the goal's autonomy envelope.
+experiment within the goal's autonomy envelope and remaining contingency caps.
 
 Commit interactive positive, negative, or failed evidence whenever it changes
 or justifies steering, a decision, the goal, or next direction. Disposable

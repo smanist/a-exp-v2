@@ -15,6 +15,8 @@ the handoff, older records, and thread memory. Then read any `STEERING.md`, `PLA
 experiments, reports, budgets, artifacts, and approval entries that affect the
 current direction. Consult `protocols/registry.yaml`; when a protocol applies,
 read its playbook, schema, template, checklist, and relevant helper guidance.
+Read the approval budget in `GOAL.md`, any narrower current steering, and all
+records that account for prior contingency use.
 
 ## Advance
 
@@ -31,6 +33,30 @@ expected and is not a reason to request `needs_human`. Never edit `GOAL.md`,
 `STEERING.md`, `CONTEXT.yaml`, `handoffs/`, `STATE.yaml`, or `sessions/`;
 interactive skills and the runner own those control paths. Do not edit files
 under another study's `projects/<study>/` directory.
+
+## Handle Deviations
+
+Before requesting `needs_human`, identify the blocker and compare it with the
+approval budget. Execute a contingency only when its trigger matches exactly,
+its cumulative attempt and compute caps have capacity, and the response
+preserves every scientific invariant and human-only boundary. Do not broaden a
+contingency by analogy.
+
+Record the contingency ID, trigger evidence, action, per-run use, cumulative
+use, outcome, and affected artifacts in editable study memory. Apply an
+authorized implementation fix, bounded retry, extra diagnostic, or predeclared
+truth-only coverage extension autonomously. A truth-only extension must remain
+isolated from training, selection, failure rescue, benchmark membership, and
+claims. If more work remains afterward, request `ready`; if the evidence
+criteria are satisfied, request `completed`.
+
+Request human input when no contingency matches, a cap is exhausted, the
+scientific effect is ambiguous, or the response would change an equation,
+scientific or evaluation parameter, observation, estimand, metric, threshold,
+sample requirement, benchmark membership, sealed-data boundary, compute
+envelope, or claim scope. An implementation/specification ambiguity is a
+scientific decision; a code defect relative to an unambiguous specification is
+not.
 
 ## Finish
 
@@ -52,7 +78,8 @@ Allowed next states are `ready`, `needs_human`, `paused`, `blocked`, and
 classify it as `scientific_decision`, `approval_required`, or
 `external_resource_unavailable`; make the questions concrete. Runner-owned Git
 closeout and transient infrastructure failures do not qualify. Infrastructure
-`failed` is runner-owned.
+`failed` is runner-owned. State which approval-budget check failed when
+requesting `needs_human`.
 
 Before answering, inspect `git status --short`. The runner will reject
 undeclared paths, scheduler-owned `.a-exp` paths, and any modification to the

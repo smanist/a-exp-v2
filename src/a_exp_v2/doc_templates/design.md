@@ -41,6 +41,9 @@ and state transition, and returns.
 - Autonomous turns cannot edit interactive context/control files. Interactive
   and autonomous material computations share experiment conventions and state
   their producer; interactive turns never create session records.
+- Study goals separate scientific invariants, bounded authorized contingencies,
+  and human-only decisions. Autonomous turns use an exact matching contingency
+  before escalating and account for cumulative use across sessions.
 
 ## Layout
 
